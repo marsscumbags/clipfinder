@@ -11,8 +11,13 @@
 ; ============================================================
 
 !define APP_NAME     "ClipFinder"
-!define APP_VERSION "1.4.0.1"
-!define APP_EXE      "clipfinder.exe"
+!define APP_VERSION "1.4.0.2"
+; No launcher EXE since 1.4.0.2: the PyInstaller --onefile launcher (clipfinder.exe) was quarantined by
+; Microsoft Defender as "PUA: Settings Modifier" (unsigned self-extracting bootloader that spawns a hidden
+; python). The shortcuts now start the embedded, PSF-signed pythonw.exe with clipfinder.py directly.
+; Do NOT bring back a PyInstaller/py2exe style launcher.
+!define APP_PYW      "python\pythonw.exe"
+!define APP_SCRIPT   "clipfinder.py"
 !define INSTALL_DIR  "$LOCALAPPDATA\ClipFinder"
 !define PUBLISHER    "MarsScumbags"
 !define WEBSITE      "https://github.com/thatspeedykid/clipfinder"
@@ -31,7 +36,8 @@ Unicode       True
 !define MUI_UNICON "clipfinder.ico"
 !define MUI_WELCOMEPAGE_TITLE    "Install ClipFinder ${APP_VERSION}"
 !define MUI_WELCOMEPAGE_TEXT     "ClipFinder is an AI-powered drama clip extractor.$\n$\nThe downloader, AI providers and faster-whisper transcription are pre-bundled - works immediately after install. Optional extras (music removal, OpenAI Whisper) are installed on demand from inside the app."
-!define MUI_FINISHPAGE_RUN       "$INSTDIR\${APP_EXE}"
+!define MUI_FINISHPAGE_RUN       "$INSTDIR\${APP_PYW}"
+!define MUI_FINISHPAGE_RUN_PARAMETERS "$\"$INSTDIR\${APP_SCRIPT}$\""
 !define MUI_FINISHPAGE_RUN_TEXT  "Launch ClipFinder now"
 !define MUI_FINISHPAGE_LINK      "Visit GitHub for updates"
 !define MUI_FINISHPAGE_LINK_LOCATION "${WEBSITE}"
@@ -70,9 +76,12 @@ Section "ClipFinder" SecMain
     no_previous_install:
     ; clipfinder_core.py was retired - remove the copy an older install left behind
     Delete "$INSTDIR\clipfinder_core.py"
+    ; the old PyInstaller launcher (Defender flagged it) and the shortcuts that pointed at it
+    Delete "$INSTDIR\clipfinder.exe"
+    Delete "$SMPROGRAMS\${APP_NAME}\${APP_NAME}.lnk"
+    Delete "$DESKTOP\${APP_NAME}.lnk"
 
     SetOutPath "$INSTDIR"
-    File "ClipFinder_dist\clipfinder.exe"
     File "ClipFinder_dist\clipfinder.ico"
     File "ClipFinder_dist\clipfinder.py"
     File "ClipFinder_dist\README.md"
@@ -97,12 +106,13 @@ Section "ClipFinder" SecMain
     SetOutPath "$INSTDIR\vlc"
     File /nonfatal /r "ClipFinder_dist\vlc\*.*"
 
+    ; Shortcuts take $OUTDIR as their "Start in" folder - must be $INSTDIR (the app resolves files from it)
     SetOutPath "$INSTDIR"
 
     WriteUninstaller "$INSTDIR\Uninstall.exe"
     CreateDirectory "$SMPROGRAMS\${APP_NAME}"
-    CreateShortcut "$SMPROGRAMS\${APP_NAME}\${APP_NAME}.lnk" "$INSTDIR\${APP_EXE}" "" "$INSTDIR\clipfinder.ico"
-    CreateShortcut "$DESKTOP\${APP_NAME}.lnk" "$INSTDIR\${APP_EXE}" "" "$INSTDIR\clipfinder.ico"
+    CreateShortcut "$SMPROGRAMS\${APP_NAME}\${APP_NAME}.lnk" "$INSTDIR\${APP_PYW}" "$\"$INSTDIR\${APP_SCRIPT}$\"" "$INSTDIR\clipfinder.ico" 0 SW_SHOWNORMAL "" "${APP_NAME}"
+    CreateShortcut "$DESKTOP\${APP_NAME}.lnk" "$INSTDIR\${APP_PYW}" "$\"$INSTDIR\${APP_SCRIPT}$\"" "$INSTDIR\clipfinder.ico" 0 SW_SHOWNORMAL "" "${APP_NAME}"
 
     WriteRegStr   HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\${APP_NAME}" "DisplayName"     "${APP_NAME} ${APP_VERSION}"
     WriteRegStr   HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\${APP_NAME}" "DisplayVersion"  "${APP_VERSION}"

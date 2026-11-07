@@ -19,7 +19,7 @@ Usage (run from anywhere, paths resolve relative to the repo root):
     python tools/release_version.py selftest
 
 3-part versions are normalised to 4 parts (v1.4.0 -> 1.4.0.0).  Files always hold the
-4-part form because the Windows version resources (NSIS VIProductVersion, PyInstaller
+4-part form because the Windows version resources (NSIS VIProductVersion, Explorer
 version file) need exactly four numbers.
 
 Exit codes: 0 ok, 1 version problem / failed check, 2 usage error.
@@ -118,7 +118,7 @@ def read_version(root: Path, target: Target) -> str:
 
 def read_app_version(root: Path = REPO_ROOT) -> str:
     """APP_VERSION of clipfinder.py, validated as a canonical X.Y.Z.W string.
-    (build_launcher.py uses this so the launcher EXE gets the same number.)"""
+    (CI uses this to check the clipfinder.py that ships in the installer.)"""
     raw = read_version(root, TARGETS[0])
     if not _VERSION_4.match(raw):
         raise ReleaseError(f'clipfinder.py: APP_VERSION {raw!r} is not X.Y.Z.W')

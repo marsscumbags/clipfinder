@@ -4,7 +4,7 @@ set PIP_DISABLE_PIP_VERSION_CHECK=1
 title ClipFinder - Build Installer
 
 :: Which Python builds everything. Locally: the py launcher. CI sets PYEXE=python (the
-:: setup-python interpreter) so embed version, tkinter source and launcher all come from one place.
+:: setup-python interpreter) so embed version and tkinter source come from one place.
 if not defined PYEXE set "PYEXE=py -3.12"
 
 echo ============================================
@@ -43,9 +43,10 @@ del _getpip.py
 mkdir "ClipFinder_dist\pkgs"
 echo     OK
 
-:: Step 3: Copy app files + build launcher EXE
+:: Step 3: Copy app files. There is NO launcher EXE (since 1.4.0.2): the shortcuts start
+:: python\pythonw.exe clipfinder.py. The old PyInstaller launcher was flagged by Microsoft Defender.
 echo.
-echo [3/4] Building launcher + packaging app...
+echo [3/4] Packaging app...
 copy "clipfinder.py"       "ClipFinder_dist\clipfinder.py"       >nul || goto :copyfail
 if exist "clipfinder.ico"  copy "clipfinder.ico"  "ClipFinder_dist\clipfinder.ico"  >nul
 if exist "preview.webp"    copy "preview.webp"    "ClipFinder_dist\preview.webp"    >nul
@@ -79,10 +80,7 @@ if exist "vision_refs" (
     xcopy /s /q "vision_refs\*" "ClipFinder_dist\vision_refs\" >nul 2>&1
 )
 
-%PYEXE% -m pip install pyinstaller==6.22.3 --quiet
-if errorlevel 1 ( echo [ERROR] pip install pyinstaller failed & (if not defined CI pause) & exit /b 1 )
-%PYEXE% build_launcher.py
-if errorlevel 1 ( echo [ERROR] Launcher build failed & (if not defined CI pause) & exit /b 1 )
+if not exist "ClipFinder_dist\python\pythonw.exe" ( echo [ERROR] ClipFinder_dist\python\pythonw.exe missing - the shortcuts need it & (if not defined CI pause) & exit /b 1 )
 echo     OK
 
 :: Step 4: NSIS - called separately by workflow after packages are pre-installed

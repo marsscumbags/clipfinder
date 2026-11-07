@@ -1,12 +1,12 @@
 """
 ClipFinder — AI Drama Clip Extractor
-Run: python clipfinder.py  OR  ClipFinder.exe
+Run: python clipfinder.py   (installed copy: the shortcuts start python/pythonw.exe clipfinder.py)
 
 When running as EXE: the app launches immediately.
 Use Settings → Update Modules to install AI/transcription packages.
 """
 
-APP_VERSION = "1.4.0.1"
+APP_VERSION = "1.4.0.2"
 
 import subprocess
 import sys

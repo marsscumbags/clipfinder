@@ -48,7 +48,7 @@ After the build, read back from the real artifacts:
 | Check | Fails when |
 |---|---|
 | installer EXE properties | `ClipFinder-Setup.exe` FileVersion / ProductVersion differ from the version |
-| launcher EXE properties | `ClipFinder_dist\ClipFinder.exe` FileVersion / ProductVersion differ |
+| no launcher EXE | `ClipFinder_dist\clipfinder.exe` exists (the PyInstaller launcher was dropped in 1.4.0.2 - Defender PUA), or `python\pythonw.exe` is missing / not validly signed |
 | shipped app | the `clipfinder.py` inside the installer has another `APP_VERSION`, differs from the repo file, or `clipfinder_core.py` is present |
 | bundled packages | `tools/smoke_pkgs.py` (run with the *embedded* Python) finds a requirement missing or unimportable, or a dropped package (torch, demucs, ...) bundled again |
 | installer size | outside 80-450 MB |
@@ -73,7 +73,7 @@ deliberately **not** bundled - the app installs them on demand.
 
 ```bat
 py -3.12 --version                      :: must be 3.12.10 (the embedded Python is built from the same version)
-build_installer.bat                     :: ClipFinder_dist\ with embedded Python, launcher, app files
+build_installer.bat                     :: ClipFinder_dist\ with embedded Python + app files (no launcher EXE)
 py -3.12 -m pip install --target ClipFinder_dist\pkgs --only-binary=:all: -r requirements.txt
 makensis ClipFinder.nsi                 :: -> ClipFinder-Setup.exe
 ```

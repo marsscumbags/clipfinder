@@ -1,5 +1,10 @@
 # ClipFinder Changelog
 
+## v1.4.0.2 — November 2026
+
+### 🐛 Bug Fixes
+- **Microsoft Defender quarantined `ClipFinder.exe` as "Settings Modifier" (PUA)** along with the Start Menu / Desktop shortcuts. The PyInstaller `--onefile` launcher EXE is removed: the shortcuts and the installer's "Launch now" start the embedded, PSF-signed `python\pythonw.exe clipfinder.py` directly (Start in = install folder). The installer deletes the old `clipfinder.exe` and its shortcuts on upgrade. `build_launcher.py` and the PyInstaller build step are gone; CI now fails if a `clipfinder.exe` ships or if `pythonw.exe` is missing or not validly signed.
+
 ## v1.4.0.1 — September 2026
 
 ### 🐛 Bug Fixes

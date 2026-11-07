@@ -4,7 +4,8 @@
 # builds ClipFinder-Setup.exe and publishes it.  Every place that carries the version is checked
 # (source files up front, the built EXEs at the end) and any disagreement FAILS the build:
 #   tag == APP_VERSION (clipfinder.py) == !define APP_VERSION (ClipFinder.nsi) == README badge
-#       == installer EXE properties == launcher EXE properties == clipfinder.py shipped in the installer
+#       == installer EXE properties == clipfinder.py shipped in the installer
+# There is no launcher EXE (since 1.4.0.2, Defender flagged the PyInstaller one): shortcuts run python\pythonw.exe.
 #
 # Release procedure: see tools/README.md.
 # Rehearse without publishing: Actions -> "Build & Release" -> Run workflow (dry_run = true).
@@ -92,7 +93,7 @@ jobs:
           if ((Get-Content -Raw $notes).Trim().Length -lt 20) { Fail "$notes is empty" }
 
           foreach ($f in 'ClipFinder.nsi','clipfinder.py','clipfinder.ico','README.md','CHANGELOG.md',
-                         'requirements.txt','build_installer.bat','setup_embed.py','build_launcher.py',
+                         'requirements.txt','build_installer.bat','setup_embed.py',
                          'tools\smoke_pkgs.py','assets\clipfinder_logo_512.png') {
             if (-not (Test-Path $f)) { Fail "Required file missing: $f" }
           }
@@ -131,7 +132,7 @@ jobs:
           & $mk /VERSION
           if ($LASTEXITCODE -ne 0) { throw "makensis /VERSION failed ($LASTEXITCODE)" }
 
-      - name: Build base (embedded python + launcher + app files)
+      - name: Build base (embedded python + app files)
         shell: cmd
         env:
           PYEXE: python
@@ -180,7 +181,7 @@ jobs:
           $ver = $env:VER
           $problems = @()
 
-          foreach ($f in 'ClipFinder_dist\clipfinder.exe', 'ClipFinder-Setup.exe') {
+          foreach ($f in @('ClipFinder-Setup.exe')) {
             $vi = (Get-Item $f).VersionInfo
             foreach ($pair in @(@('FileVersion', $vi.FileVersion), @('ProductVersion', $vi.ProductVersion),
                                 @('FileVersionRaw', "$($vi.FileVersionRaw)"), @('ProductVersionRaw', "$($vi.ProductVersionRaw)"))) {
@@ -196,6 +197,11 @@ jobs:
           elseif ($shipped -ne $ver) { $problems += "ClipFinder_dist\clipfinder.py has APP_VERSION '$shipped', expected '$ver'" }
           else { Write-Host "ok  ClipFinder_dist\clipfinder.py APP_VERSION = $ver" }
           if ((Get-FileHash ClipFinder_dist\clipfinder.py).Hash -ne (Get-FileHash clipfinder.py).Hash) { $problems += 'ClipFinder_dist\clipfinder.py differs from the repo clipfinder.py' }
+          if (Test-Path ClipFinder_dist\clipfinder.exe) { $problems += 'ClipFinder_dist\clipfinder.exe exists: the PyInstaller launcher was dropped (Defender PUA) and must not ship' }
+          if (-not (Test-Path ClipFinder_dist\python\pythonw.exe)) { $problems += 'ClipFinder_dist\python\pythonw.exe is missing: the shortcuts start the app with it' }
+          $pyw = Get-AuthenticodeSignature ClipFinder_dist\python\pythonw.exe
+          if ($pyw.Status -ne 'Valid') { $problems += "ClipFinder_dist\python\pythonw.exe signature is '$($pyw.Status)', expected Valid (PSF-signed)" }
+          else { Write-Host "ok  pythonw.exe signed by $($pyw.SignerCertificate.Subject)" }
           if (Test-Path ClipFinder_dist\clipfinder_core.py) { $problems += 'ClipFinder_dist\clipfinder_core.py exists: the core module is retired and must not ship' }
 
           if ($problems.Count -gt 0) {
