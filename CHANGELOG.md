@@ -5,6 +5,13 @@
 ### 🐛 Bug Fixes
 - **Microsoft Defender quarantined `ClipFinder.exe` as "Settings Modifier" (PUA)** along with the Start Menu / Desktop shortcuts. The PyInstaller `--onefile` launcher EXE is removed: the shortcuts and the installer's "Launch now" start the embedded, PSF-signed `python\pythonw.exe clipfinder.py` directly (Start in = install folder). The installer deletes the old `clipfinder.exe` and its shortcuts on upgrade. `build_launcher.py` and the PyInstaller build step are gone; CI now fails if a `clipfinder.exe` ships or if `pythonw.exe` is missing or not validly signed.
 
+### 🔌 Providers / downloads (re-verified 2026-11-07)
+- **OpenRouter:** dead `:free` ids removed (`deepseek-v4-flash-0731`, `nemotron-3-super-120b-a12b`, `nex-n2.5-pro`, `nex-n2.5-mini`, `qwen3.8-27b`); now `nemotron-3-ultra-550b-a55b`, `nemotron-3.5-super-vl`, `gemma-4-31b-it`, `gemma-4-26b-a4b-it`, `nemotron-3.5-lightning`, `openrouter/free`. All Nemotron 3.x get low reasoning effort + token headroom.
+- **Gemini:** `gemini-2.5-flash` (deprecated, routed to 3.5-flash-lite from 2026-12-01) replaced by `gemini-3.6-flash`.
+- **curl-cffi** registry range `>=0.10,<0.18` (yt-dlp 2026.10.26 accepts `<0.18` and pins 0.17.0).
+- **Node.js** portable download `v24.21.0` → `v24.22.2` (24.22.1 = security release).
+- Unchanged and verified: Groq (`gpt-oss-120b/20b`, `qwen3.8-27b`), Kick v1/v2 + web.kick.com endpoints, Twitch GQL.
+
 ## v1.4.0.1 — September 2026
 
 ### 🐛 Bug Fixes

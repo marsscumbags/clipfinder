@@ -292,8 +292,8 @@ def _pm_satisfies(ver, spec):
 PKG_REGISTRY = [
     dict(name='yt-dlp', extras='default,curl-cffi', mod='yt_dlp', group='Downloader', policy='latest',
          spec='>=2026.8.19', required=True, desc='Video downloader. Sites change constantly, so this one is kept on the newest release'),
-    dict(name='curl-cffi', mod='curl_cffi', group='Downloader', policy='compat', spec='>=0.10,<0.17',
-         required=True, desc='Browser impersonation for Kick / TikTok (yt-dlp accepts only 0.10 - 0.16)'),
+    dict(name='curl-cffi', mod='curl_cffi', group='Downloader', policy='compat', spec='>=0.10,<0.18',
+         required=True, desc='Browser impersonation for Kick / TikTok (yt-dlp accepts only 0.10 - 0.17)'),
     dict(name='requests', mod='requests', group='Downloader', policy='keep', spec='>=2.32.2,<3',
          required=True, desc='HTTP client'),
     dict(name='google-genai', mod='google.genai', group='AI providers', policy='compat', spec='>=2.24,<3',
@@ -1676,7 +1676,7 @@ def ensure_ffmpeg():
 
 
 _NODE_MIN_MAJOR = 22
-_NODE_URL = 'https://nodejs.org/dist/v24.21.0/node-v24.21.0-win-x64.zip'   # Node 24 LTS "Krypton"
+_NODE_URL = 'https://nodejs.org/dist/v24.22.2/node-v24.22.2-win-x64.zip'   # Node 24 LTS "Krypton"
 _NODE_MAJOR_CACHE = {}
 
 def _node_major(exe):
@@ -2110,22 +2110,25 @@ def _apply_ttk_styles(root):
 PROVIDERS = {
     'Google Gemini (Free)': {
         'lib':    'gemini',
-        # Verified Sep 2026. gemini-2.0-* were shut down 2026-06-01. Order = UI order;
-        # models[0] is the default. 'roles' = same ids ordered per job (see _ai_models).
+        # Verified Nov 2026 (docs). gemini-2.0-* were shut down 2026-06-01. gemini-2.5-flash is
+        # deprecated: from 2026-12-01 its requests are routed to gemini-3.5-flash-lite, so it is
+        # gone from the list (replaced by the stable gemini-3.6-flash). gemini-2.5-flash-lite is
+        # still served, no shutdown date. Order = UI order; models[0] is the default.
+        # 'roles' = same ids ordered per job (see _ai_models).
         'models': ['gemini-3.5-flash-lite', 'gemini-3.8-flash',
-                   'gemini-2.5-flash', 'gemini-2.5-flash-lite'],
+                   'gemini-3.6-flash', 'gemini-2.5-flash-lite'],
         'roles': {
-            'tiny':    ['gemini-3.5-flash-lite', 'gemini-2.5-flash-lite', 'gemini-2.5-flash'],
-            'write':   ['gemini-3.5-flash-lite', 'gemini-3.8-flash', 'gemini-2.5-flash', 'gemini-2.5-flash-lite'],
-            'extract': ['gemini-3.8-flash', 'gemini-3.5-flash-lite', 'gemini-2.5-flash', 'gemini-2.5-flash-lite'],
-            'vision':  ['gemini-3.5-flash-lite', 'gemini-3.8-flash', 'gemini-2.5-flash', 'gemini-2.5-flash-lite'],
+            'tiny':    ['gemini-3.5-flash-lite', 'gemini-2.5-flash-lite', 'gemini-3.6-flash'],
+            'write':   ['gemini-3.5-flash-lite', 'gemini-3.8-flash', 'gemini-3.6-flash', 'gemini-2.5-flash-lite'],
+            'extract': ['gemini-3.8-flash', 'gemini-3.5-flash-lite', 'gemini-3.6-flash', 'gemini-2.5-flash-lite'],
+            'vision':  ['gemini-3.5-flash-lite', 'gemini-3.8-flash', 'gemini-3.6-flash', 'gemini-2.5-flash-lite'],
         },
         'url':    'https://aistudio.google.com/apikey',
         'note':   'Free — no credit card needed',
     },
     'Groq (Free)': {
         'lib':    'groq',
-        # Verified Sep 2026. llama-3.3-70b-versatile and llama-3.1-8b-instant were
+        # Verified Nov 2026 (unchanged since Sep). llama-3.3-70b-versatile and llama-3.1-8b-instant were
         # SHUT DOWN 2026-08-16 (also qwen3-32b / llama-4-scout 2026-07-17). Free plan
         # = 30 RPM, 8K tokens/min per model, so keep each request small (see
         # _GROQ_MAX_PROMPT_CHARS); gpt-oss are reasoning models (see _groq_kwargs).
@@ -2145,27 +2148,26 @@ PROVIDERS = {
     },
     'OpenRouter (Free models)': {
         'lib':    'openrouter',
-        # Verified against the live OpenRouter catalog (Sep 2026). Gone: llama-3.3-70b
-        # :free, qwen3-next-80b :free, nemotron-nano-9b-v2 :free. openrouter/auto is
-        # PAID (variable price) - the free router is openrouter/free. Free ':free'
-        # models are capped at 20 req/min and 50 req/day (1000/day with $10 credit).
+        # Verified against the live OpenRouter catalog (2026-11-07). Gone since Sep:
+        # deepseek-v4-flash-0731, nemotron-3-super-120b, nex-n2.5-pro/-mini, qwen3.8-27b (:free).
+        # openrouter/auto is PAID (variable price) - the free router is openrouter/free. Free
+        # ':free' models are capped at 20 req/min and 50 req/day (1000/day with $10 credit).
         'models': [
-            'deepseek/deepseek-v4-flash-0731:free',     # 1M ctx, best free extraction (always reasons)
-            'nvidia/nemotron-3-super-120b-a12b:free',   # 262k ctx
-            'nex-agi/nex-n2.5-pro:free',                # 262k ctx, reasoning can be off
-            'google/gemma-4-31b-it:free',               # 262k ctx, no forced reasoning
-            'qwen/qwen3.8-27b:free',                    # multimodal
-            'nex-agi/nex-n2.5-mini:free',               # small / fast
+            'nvidia/nemotron-3-ultra-550b-a55b:free',   # 1M ctx, main extraction (reasons)
+            'nvidia/nemotron-3.5-super-vl:free',        # 1M ctx, text + images (reasons)
+            'google/gemma-4-31b-it:free',               # 262k ctx, text + images
+            'google/gemma-4-26b-a4b-it:free',           # 262k ctx, text + images, faster
+            'nvidia/nemotron-3.5-lightning:free',       # 1M ctx, small / fast
             'openrouter/free',                          # OR free router - last resort
         ],
         'roles': {
-            'tiny':    ['nex-agi/nex-n2.5-mini:free', 'google/gemma-4-31b-it:free', 'openrouter/free'],
-            'write':   ['nex-agi/nex-n2.5-pro:free', 'google/gemma-4-31b-it:free', 'openrouter/free'],
-            'extract': ['deepseek/deepseek-v4-flash-0731:free', 'nvidia/nemotron-3-super-120b-a12b:free',
-                        'nex-agi/nex-n2.5-pro:free', 'google/gemma-4-31b-it:free',
-                        'qwen/qwen3.8-27b:free', 'nex-agi/nex-n2.5-mini:free', 'openrouter/free'],
-            'vision':  ['nex-agi/nex-n2.5-pro:free', 'qwen/qwen3.8-27b:free',
-                        'google/gemma-4-31b-it:free', 'openrouter/free'],
+            'tiny':    ['nvidia/nemotron-3.5-lightning:free', 'google/gemma-4-26b-a4b-it:free', 'openrouter/free'],
+            'write':   ['google/gemma-4-31b-it:free', 'nvidia/nemotron-3-ultra-550b-a55b:free', 'openrouter/free'],
+            'extract': ['nvidia/nemotron-3-ultra-550b-a55b:free', 'nvidia/nemotron-3.5-super-vl:free',
+                        'nvidia/nemotron-3.5-lightning:free', 'google/gemma-4-31b-it:free',
+                        'google/gemma-4-26b-a4b-it:free', 'openrouter/free'],
+            'vision':  ['nvidia/nemotron-3.5-super-vl:free', 'google/gemma-4-31b-it:free',
+                        'google/gemma-4-26b-a4b-it:free', 'openrouter/free'],
         },
         'url':    'https://openrouter.ai/keys',
         'note':   'Free — no credit card needed',
@@ -2425,7 +2427,7 @@ def _openrouter_kwargs(model, max_tokens):
     m = str(model or '').lower()
     cap = int(max_tokens)
     extra = {}
-    if any(x in m for x in ('deepseek-v4', 'nemotron-3-super', 'qwen3.8')):
+    if any(x in m for x in ('deepseek-v4', 'nemotron-3', 'qwen3.8')):   # nemotron-3 = 3-ultra, 3.5-*
         extra = {'reasoning': {'effort': 'low'}}
         cap += 4096
     return {'max_tokens': cap, 'extra_body': extra}
@@ -16711,7 +16713,7 @@ Return ONLY the JSON array, no other text."""
                 ('faster_whisper','faster-whisper', 'CUDA/CPU transcription fallback'),
                 ('yt_dlp',        'yt-dlp',         'Video downloader'),
                 ('cv2',           'opencv-python',  'Video frame processing'),
-                ('curl_cffi',     'curl-cffi',      'Kick/Cloudflare bypass — v0.10 to 0.16 (what yt-dlp accepts)'),
+                ('curl_cffi',     'curl-cffi',      'Kick/Cloudflare bypass — v0.10 to 0.17 (what yt-dlp accepts)'),
                 ('soundfile',     'soundfile',       'Audio processing for censor'),
                 ('imagehash',     'imagehash',       'Image deduplication for thumbnails'),
             ]
@@ -16736,7 +16738,7 @@ Return ONLY the JSON array, no other text."""
                     ))
                     import subprocess as _sp3
                     _nodeps2 = pip_pkg in {'faster-whisper', 'openai-whisper'}
-                    # Use the registry's version range (e.g. curl-cffi >=0.10,<0.17) instead of a bare/unpinned name
+                    # Use the registry's version range (e.g. curl-cffi >=0.10,<0.18) instead of a bare/unpinned name
                     _ent2 = pm_entry(pip_pkg)
                     _req2 = pm_requirement(_ent2) if _ent2 else pip_pkg
                     _cmd2 = _pip_cmd([_req2], ['--no-deps'] if _nodeps2 else [])
