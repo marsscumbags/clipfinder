@@ -1,5 +1,10 @@
 # ClipFinder Changelog
 
+## v1.4.0.5 — November 2026
+
+### 🐛 Bug Fixes
+- **openai-whisper install** failed its import test (`No module named 'torch'`, and numba / tiktoken / more-itertools were never installed because it is staged `--no-deps`). The registry's `needs` was never read; `pm_stage` now adds missing `needs` entries (torch, from the CPU index) and the entry's new `deps` list to the shared transaction, and import-tests later groups against the batches staged earlier in the same call. Verified with the real embedded Python: deps + openai-whisper staged and import-tested OK; `whisper` transcribed a test clip.
+
 ## v1.4.0.4 — November 2026
 
 ### 🔧 Changes

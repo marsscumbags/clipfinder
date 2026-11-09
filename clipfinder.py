@@ -6,7 +6,7 @@ When running as EXE: the app launches immediately.
 Use Settings → Update Modules to install AI/transcription packages.
 """
 
-APP_VERSION = "1.4.0.4"
+APP_VERSION = "1.4.0.5"
 
 import subprocess
 import sys
@@ -312,7 +312,9 @@ PKG_REGISTRY = [
     dict(name='faster-whisper', mod='faster_whisper', group='Transcription', policy='keep', spec='>=1.2.1,<2',
          required=True, desc='Transcription engine (CPU / NVIDIA)'),
     dict(name='openai-whisper', mod='whisper', group='Transcription', policy='keep', spec='==20250625',
-         required=False, no_deps=True, sdist=True, needs=['torch'], desc='Fallback transcription engine (needs PyTorch)'),
+         required=False, no_deps=True, sdist=True, needs=['torch'],
+         deps=['more-itertools', 'numba', 'tiktoken', 'tqdm'],   # its own requirements minus torch (needs) / numpy
+         desc='Fallback transcription engine (needs PyTorch)'),
     dict(name='torch', mod='torch', group='Transcription', policy='keep', spec='>=2.1', required=False,
          index=CPU_TORCH_INDEX, timeout=5400, desc='PyTorch (CPU) - only needed by the openai-whisper fallback'),
     dict(name='Pillow', mod='PIL', group='Media', policy='keep', spec='>=10', required=True, desc='Image processing'),
@@ -668,17 +670,40 @@ def pm_stage(entries, on_line=None, cancel=None):
     Verifies every module imports from the staged copy. -> list of result dicts (one per transaction)."""
     if not pm_ensure_pip(on_line):
         return [dict(ok=False, names=[e['name'] for e in entries], error='pip is not available for this Python')]
+    entries = list(entries)
+    names = {_pm_norm(e['name']) for e in entries}
+    inst = pm_installed()
+    # 'needs': other registry packages that must be there too (openai-whisper -> torch). Add the missing ones.
+    # 'deps':  plain requirements of a --no-deps package (installed for it in the shared transaction).
+    # Before 1.4.0.5 neither was read, so openai-whisper staged alone and failed its import test
+    # ("No module named 'torch'", then numba / tiktoken).
+    for e in list(entries):
+        for n in e.get('needs', []):
+            ne = pm_entry(n)
+            if ne is not None and _pm_norm(ne['name']) not in names and pm_version(ne, inst) is None:
+                entries.insert(0, ne); names.add(_pm_norm(ne['name']))
     joint = [e for e in entries if not e.get('no_deps')]
+    for e in entries:
+        for d in e.get('deps', []):
+            if _pm_norm(d) not in names:
+                joint.append(dict(name=d, mod=None, policy='keep', spec='', required=False, group='', desc=''))
+                names.add(_pm_norm(d))
     solo = [e for e in entries if e.get('no_deps')]
     results = []
+    staged_ok = []                                       # batches from this call: later groups import-test against them
     for group in ([joint] if joint else []) + [[e] for e in solo]:
         if cancel is not None and cancel.is_set():
             break
-        results.append(_pm_stage_group(group, on_line, cancel))
+        r = _pm_stage_group(group, on_line, cancel, also=staged_ok)
+        results.append(r)
+        if r.get('ok') and r.get('batch'):
+            staged_ok.append(_PathBase(r['batch']))
+        elif any(e.get('needs') or e.get('deps') for e in entries) and group is joint:
+            break                                        # the package that needed these cannot work: stop here
     return results
 
 
-def _pm_stage_group(group, on_line, cancel):
+def _pm_stage_group(group, on_line, cancel, also=()):
     names = [e['name'] for e in group]
     batch = STAGE_DIR / (_um_time.strftime('%Y%m%d-%H%M%S') + '-' + _pm_norm(names[0])[:24])
     _um_sh.rmtree(batch, ignore_errors=True)
@@ -722,7 +747,7 @@ def _pm_stage_group(group, on_line, cancel):
             return dict(ok=False, names=names, error=f'{e["name"]} was not installed by pip (see update.log)')
     for e in group:
         if e.get('mod'):
-            ok, err = pm_verify(e['mod'], [batch, PKGS_DIR])          # staged copy first, live deps behind it
+            ok, err = pm_verify(e['mod'], [batch] + list(also) + [PKGS_DIR])   # staged copy first, then this call's other batches, live last
             if not ok:
                 _um_sh.rmtree(batch, ignore_errors=True)
                 um_log(f'verify failed for {e["name"]}: {err}')
