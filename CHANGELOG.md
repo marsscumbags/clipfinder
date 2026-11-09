@@ -1,5 +1,18 @@
 # ClipFinder Changelog
 
+## v1.4.0.3 — November 2026
+
+### 🐛 Bug Fixes
+- **Transcription repetition loops** ("that's it, that's it, ..."): whisper.cpp now runs with `-mc 0` (no previous-text context; reproduced the reported loop with ggml-base and the old flags). `--no-fallback` is kept: with temperature fallback on, real clips lost whole sentences and looped across segments. New `_clean_repeats` safety net on every `_do_transcribe` result (and the Censor path): a 1-8 word phrase repeated back to back 4+ times (single word 5+) is cut to 2 copies, the same line in 3+ consecutive segments is cut to 2, word timestamps trimmed with the text. openai-whisper fallback and the Censor faster-whisper call now use `condition_on_previous_text=False` + compression threshold.
+- **Core Dependencies checked `opencv-python`** while the installer ships `opencv-contrib-python`, so OpenCV showed as missing; its Install button ran `pip install --target PKGS_DIR` inside the running app, died on a locked numpy `.pyd` and left numpy half-deleted. Status now accepts the registry `alt` names; inline Install buttons for registry packages go through `pm_stage` (staged, applied on restart).
+- **Self-healing packages:** `pm_missing_files` compares each required package's RECORD with the disk; half-installed packages get state `broken` and are reinstalled by the start-up sync (verified: repaired a damaged numpy 2.5.3 on the first start). Update Center shows them with a 🔧 Repair button.
+- **openai-whisper install** (`BackendUnavailable: Cannot import 'setuptools.build_meta'`): source-only packages (`sdist=True`) are built with `--no-build-isolation` after `pm_ensure_build_tools` puts setuptools + wheel into the embedded Python (its `._pth` ignores the PYTHONPATH pip's isolated build relies on).
+- **faster-whisper model download** `[WinError 1314]` (symlink privilege): `HF_HUB_DISABLE_SYMLINKS=1` is set before anything imports huggingface_hub.
+
+### ✨ Changes
+- Editor tab switched off (`EDITOR_ENABLED = False`): hidden from the tab bar and the channel browser's Edit button; code kept.
+- Settings → **What is what**: guide window (`GUIDE_SECTIONS`) for tabs, providers, engines, models and components.
+
 ## v1.4.0.2 — November 2026
 
 ### 🐛 Bug Fixes

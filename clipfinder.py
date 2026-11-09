@@ -6,11 +6,18 @@ When running as EXE: the app launches immediately.
 Use Settings → Update Modules to install AI/transcription packages.
 """
 
-APP_VERSION = "1.4.0.2"
+APP_VERSION = "1.4.0.3"
 
 import subprocess
 import sys
 import os
+
+# Hugging Face model downloads (faster-whisper models): never use symlinks. Its cache links every file to a
+# blob, which on Windows needs Developer Mode or admin rights. Its own "are symlinks supported?" probe can
+# still say yes and then the real link fails with "[WinError 1314] A required privilege is not held by the
+# client". Copies cost a little disk space and always work. Must be set before huggingface_hub is imported.
+os.environ.setdefault('HF_HUB_DISABLE_SYMLINKS', '1')
+os.environ.setdefault('HF_HUB_DISABLE_SYMLINKS_WARNING', '1')
 
 # Add ClipFinder pkgs to path immediately — before ANY other imports
 # This ensures numpy, cv2, and all packages find each other correctly
@@ -109,7 +116,7 @@ REQUIRED_HEAVY = {
     'google.genai':   'google-genai',
     'openai':         'openai',
     'imagehash':      'imagehash',
-    'cv2':            'opencv-python',
+    'cv2':            'opencv-contrib-python',   # what the installer bundles (opencv-python would be a 2nd cv2)
     'soundfile':      'soundfile',
     'numpy':          'numpy',
 }
@@ -305,7 +312,7 @@ PKG_REGISTRY = [
     dict(name='faster-whisper', mod='faster_whisper', group='Transcription', policy='keep', spec='>=1.2.1,<2',
          required=True, desc='Transcription engine (CPU / NVIDIA)'),
     dict(name='openai-whisper', mod='whisper', group='Transcription', policy='keep', spec='==20250625',
-         required=False, no_deps=True, needs=['torch'], desc='Fallback transcription engine (needs PyTorch)'),
+         required=False, no_deps=True, sdist=True, needs=['torch'], desc='Fallback transcription engine (needs PyTorch)'),
     dict(name='torch', mod='torch', group='Transcription', policy='keep', spec='>=2.1', required=False,
          index=CPU_TORCH_INDEX, timeout=5400, desc='PyTorch (CPU) - only needed by the openai-whisper fallback'),
     dict(name='Pillow', mod='PIL', group='Media', policy='keep', spec='>=10', required=True, desc='Image processing'),
@@ -378,6 +385,36 @@ def pm_version(e, inst=None):
     return None
 
 
+def pm_missing_files(e, inst=None, root=None, limit=3):
+    """Code files (.py / .pyd / .dll) that the installed distribution's RECORD lists but that are not on
+    disk. Non-empty = the package is half-installed: e.g. a `pip install --target PKGS_DIR` that died on
+    "Access is denied" while deleting the old copy (ClipFinder had numpy loaded) left numpy\\linalg
+    nearly empty while its dist-info still said 2.5.3, so every numpy import failed and nothing noticed."""
+    root = _PathBase(root or PKGS_DIR)
+    inst = inst if inst is not None else pm_installed(root)
+    missing = []
+    for n in [e['name']] + list(e.get('alt', [])):
+        vs = inst.get(_pm_norm(n))
+        if not vs:
+            continue
+        rec = vs[-1][1] / 'RECORD'
+        try:
+            lines = rec.read_text(encoding='utf-8', errors='replace').splitlines()
+        except OSError:
+            return missing
+        for ln in lines:
+            rel = ln.split(',', 1)[0].strip()
+            if (not rel or rel.startswith('..') or '.dist-info/' in rel or '__pycache__' in rel
+                    or not rel.endswith(('.py', '.pyd', '.dll'))):
+                continue
+            if not (root / rel).exists():
+                missing.append(rel)
+                if len(missing) >= limit:
+                    return missing
+        return missing
+    return missing
+
+
 # ── PyPI (cached) ─────────────────────────────────────────────────────────────
 def _pm_pyok(req):
     """Does the running Python satisfy a release's requires_python?"""
@@ -430,7 +467,8 @@ def pm_best_version(name, spec='', force=False):
 
 def pm_plan(entries=None, online=True, force=False):
     """One row per registry entry:
-       state = 'missing' | 'below' (installed but outside the allowed range) | 'outdated' | 'ok'
+       state = 'missing' | 'below' (installed but outside the allowed range) | 'broken' (half-installed:
+               files from its RECORD are gone) | 'outdated' | 'ok'
        plus installed / latest versions, so the UI and the start-up sync share one decision."""
     entries = entries if entries is not None else PKG_REGISTRY
     inst = pm_installed()
@@ -446,6 +484,8 @@ def pm_plan(entries=None, online=True, force=False):
             row['state'] = 'missing'
         elif e.get('spec') and not _pm_satisfies(cur, e['spec']):
             row['state'] = 'below'
+        elif pm_missing_files(e, inst):
+            row['state'] = 'broken'
         elif row['latest'] and _pm_vkey(row['latest']) > _pm_vkey(cur):
             row['state'] = 'outdated' if e['policy'] in ('latest', 'compat') else 'newer'
         with lock:
@@ -551,6 +591,24 @@ def pm_ensure_pip(on_line=None):
     return rc == 0
 
 
+def pm_ensure_build_tools(on_line=None):
+    """setuptools + wheel importable by the interpreter itself (needed to build source-only packages
+    such as openai-whisper). pip's normal isolated build hands setuptools to the build step through
+    PYTHONPATH, which the embedded Python ignores (python312._pth), so the build failed with
+    "Cannot import 'setuptools.build_meta'". Source-only packages are therefore built with
+    --no-build-isolation, and the build tools live in the interpreter's own site-packages."""
+    py = pm_python()
+    if not py:
+        return False
+    chk = py + ['-c', 'import setuptools.build_meta, wheel']
+    if _um_sp.run(chk, capture_output=True, creationflags=_UM_CNW).returncode == 0:
+        return True
+    um_log('installing setuptools + wheel (build tools for source-only packages)')
+    rc, _, _ = _um_run(py + ['-m', 'pip', 'install', '--upgrade'] + _PIP_FLAGS + ['setuptools', 'wheel'],
+                       'pip[build-tools]', on_line, timeout=600)
+    return rc == 0 and _um_sp.run(chk, capture_output=True, creationflags=_UM_CNW).returncode == 0
+
+
 def _pm_explain(tail):
     """Turn the tail of a pip log into a short message a user can act on."""
     t = tail or ''
@@ -632,6 +690,10 @@ def _pm_stage_group(group, on_line, cancel):
         cmd += ['--extra-index-url', ix]
     if any(e.get('no_deps') for e in group):
         cmd += ['--no-deps']
+    if any(e.get('sdist') for e in group):                # source-only: build without isolation (see pm_ensure_build_tools)
+        if not pm_ensure_build_tools(on_line):
+            return dict(ok=False, names=names, error='Could not install the build tools (setuptools) - see update.log')
+        cmd += ['--no-build-isolation']
     cons = pm_constraints()
     if cons and not any(e.get('no_deps') for e in group):
         cmd += ['-c', str(cons)]
@@ -929,7 +991,7 @@ _UM_SYNC_STATE = USER_DIR / 'sync_state.json'
 def pm_sync_needs():
     """Required packages that are missing or outside their allowed version range (offline, instant)."""
     plan = pm_plan([e for e in PKG_REGISTRY if e.get('required')], online=False)
-    return [r for r in plan if r['state'] in ('missing', 'below')]
+    return [r for r in plan if r['state'] in ('missing', 'below', 'broken')]
 
 
 def _um_sync_state():
@@ -2104,6 +2166,72 @@ def _apply_ttk_styles(root):
     style.configure('Horizontal.TScale', background=ACCENT, troughcolor=BG4, bordercolor=BG4,
                     lightcolor=BG4, darkcolor=BG4, borderwidth=0)
     return style
+
+
+# ── "What is what" guide (Settings -> What is what) ───────────────────────────
+GUIDE_SECTIONS = [
+    ('THE TABS', [
+        ('Clip Finder', 'Paste a VOD or stream link (Kick, Twitch, YouTube, X) or pick a file. ClipFinder '
+                        'transcribes it, the AI picks the best moments, and you cut them as clips. '
+                        'Modes: Normal, Interview (back-and-forth talks) and Vision (also looks at the picture). '
+                        'Auto Edit cuts the best clips for you.'),
+        ('Transcript', 'Turns a video into text with timestamps. Use it to read or search what was said.'),
+        ('Post Studio', 'Writes captions and posts for TikTok, Instagram, YouTube Shorts and X from a clip.'),
+        ('Downloader', 'Downloads videos from links, or browse a Kick / Twitch / YouTube channel and grab VODs.'),
+        ('Thumbnails', 'Finds images for thumbnails (still in beta).'),
+        ('Studio', 'Duplicate image finder and an AI upscaler for images.'),
+        ('Censor', 'Finds swear words in a clip and beeps or mutes them.'),
+        ('Music Removal', 'Removes background music and keeps the voices (good against copyright strikes).'),
+        ('Settings', 'API keys, AI provider, transcription engine, updates and components.'),
+    ]),
+    ('AI PROVIDERS  (pick one in Settings, all have a free tier)', [
+        ('Google Gemini', 'Default. Free key at aistudio.google.com. Can also look at images (Vision mode).'),
+        ('Groq', 'Very fast, free key at console.groq.com. Small per-minute limits, so long VODs go slower.'),
+        ('OpenRouter', 'Free models from several companies, key at openrouter.ai. 50 free requests a day.'),
+        ('Tip', 'Add keys for more than one provider: if one is out of quota, ClipFinder uses the next.'),
+    ]),
+    ('TRANSCRIPTION ENGINES  (turn speech into text; ClipFinder picks the best one you have)', [
+        ('whisper.cpp', 'Fastest. Uses your graphics card (AMD, Intel or NVIDIA through Vulkan). Recommended.'),
+        ('faster-whisper', 'Comes with the installer. Uses an NVIDIA card (CUDA) or the processor. '
+                           'Used when whisper.cpp is not installed or fails.'),
+        ('openai-whisper', 'Last-resort fallback. Slow, and needs PyTorch (a big download). '
+                           'You normally do not need it.'),
+    ]),
+    ('WHISPER MODELS  (bigger = more accurate, but slower)', [
+        ('tiny  (~75 MB)', 'Very fast, makes the most mistakes. Good for a quick test.'),
+        ('base  (~145 MB)', 'Good balance for most streams. Recommended.'),
+        ('small  (~466 MB)', 'More accurate, about 2-3x slower than base.'),
+        ('medium  (~1.5 GB)', 'Most accurate here, slow without a good graphics card.'),
+        ('ggml-...', 'The whisper.cpp version of a model. The faster-whisper version of the same size is '
+                     'downloaded separately the first time it is used.'),
+    ]),
+    ('COMPONENTS  (Settings -> Core Dependencies / Update Center)', [
+        ('ffmpeg', 'Cuts, converts and reads video and audio. Needed for everything.'),
+        ('yt-dlp', 'The downloader behind every link. Updated automatically because sites change often.'),
+        ('curl-cffi', 'Lets downloads look like a real browser, so Kick does not block them.'),
+        ('Node.js', 'Needed by yt-dlp for YouTube. Downloaded automatically when needed.'),
+        ('opencv', 'Reads video frames: face tracking, Vision mode, upscaling.'),
+        ('soundfile', 'Reads and writes audio for the Censor tab.'),
+        ('imagehash', 'Spots duplicate images (Studio, Thumbnails).'),
+        ('Music Removal engine', 'Demucs, installed separately with its own PyTorch the first time you use '
+                                 'Music Removal (a large one-time download).'),
+        ('VLC', 'Video player for the Editor. The Editor is switched off for now.'),
+    ]),
+    ('WHEN SOMETHING GOES WRONG', [
+        ('A component shows a red X', 'Click its Install button. Packages are downloaded and tested first, then '
+                                      'switched on the next time you start ClipFinder (click "Restart to finish").'),
+        ('The transcript repeats one phrase', 'Whisper sometimes gets stuck in a loop. ClipFinder now removes those '
+                                              'repeats; if it still happens, try the next bigger model.'),
+        ('Download fails', 'Settings -> Update Center -> update yt-dlp. For Kick, add a cookies.txt in Settings.'),
+        ('Updates', 'A green bar at the bottom tells you about a new version about 25 seconds after start.'),
+    ]),
+]
+
+
+# ── Feature switches ──────────────────────────────────────────────────────────
+# Editor tab (inline VLC video editor) is switched off for now: it is hidden from the tab bar and the
+# channel browser's "Edit" button is removed. The code is untouched - set True to bring it back.
+EDITOR_ENABLED = False
 
 
 # ── AI Providers ──────────────────────────────────────────────────────────────
@@ -3441,7 +3569,96 @@ def _smart_cutoff_secs(initial_prompt, duration):
     return cut if cut > 0 else None
 
 
-def _do_transcribe(vid, model_size, initial_prompt=None, ffmpeg_path=None, progress_cb=None, use_word_timestamps=False, use_gpu=True, log_cb=None):
+# ── Repetition-loop safety net ────────────────────────────────────────────────
+# Whisper (every engine) sometimes gets stuck and writes one phrase dozens of times ("that's it, that's it,
+# ..."). The engines are configured against it (no previous-text conditioning, entropy/compression
+# fallback), and whatever still slips through is collapsed here: a phrase of 1-8 words repeated back to
+# back 4+ times (a single word 5+ times) is cut to 2 copies. Normal speech ("no no no no", "alright,
+# alright, alright") is left alone. Word timestamps are trimmed together with the text.
+_REP_WORD = re.compile(r"[\w']+")
+
+def _collapse_repeats_idx(toks, keep=2, min_rep_1=5, min_rep_n=4, max_n=8):
+    """Indexes of `toks` to keep after collapsing a phrase (1..max_n words) that repeats back to back
+    min_rep_* times or more down to `keep` copies. Case/punctuation-insensitive."""
+    norm = [''.join(_REP_WORD.findall(t.lower())) for t in toks]
+    keep_idx = []
+    i, L = 0, len(toks)
+    while i < L:
+        best = None                                   # (n, reps)
+        for n in range(1, max_n + 1):
+            if i + 2 * n > L or not all(norm[i:i + n]):
+                continue
+            reps = 1
+            while i + (reps + 1) * n <= L and norm[i + reps * n:i + (reps + 1) * n] == norm[i:i + n]:
+                reps += 1
+            need = min_rep_1 if n == 1 else min_rep_n
+            if reps >= need and (best is None or reps * n > best[0] * best[1]):
+                best = (n, reps)
+        if best:
+            n, reps = best
+            keep_idx.extend(range(i, i + n * keep))
+            j = i + n * reps
+            # a cut-off partial copy of the same phrase right after the loop goes too
+            k = 0
+            while j + k < L and k < n and (norm[j + k] == norm[i + k] or
+                                           (j + k == L - 1 and norm[j + k] and norm[i + k].startswith(norm[j + k]))):
+                k += 1
+            i = j + (k if k < n else 0)
+        else:
+            keep_idx.append(i); i += 1
+    return keep_idx
+
+def _clean_repeats(segments, max_same_lines=2):
+    """Collapse repetition loops inside each segment, then drop runs of the SAME line repeated in
+    consecutive segments ("I don't know." x14) beyond `max_same_lines`, and empty leftovers."""
+    out = []
+    for sd in segments or []:
+        sd = dict(sd)
+        words = sd.get('words')
+        if words:
+            idx = _collapse_repeats_idx([w.get('word', '') for w in words])
+            if len(idx) < len(words):
+                sd['words'] = [words[i] for i in idx]
+                sd['text'] = ''.join(w.get('word', '') for w in sd['words']).strip()
+                if sd['words']:
+                    sd['end'] = min(sd.get('end', sd['words'][-1]['end']), sd['words'][-1]['end'])
+        else:
+            toks = str(sd.get('text', '')).split()
+            idx = _collapse_repeats_idx(toks)
+            if len(idx) < len(toks):
+                sd['text'] = ' '.join(toks[i] for i in idx)
+        out.append(sd)
+    final, run_key, run_len = [], None, 0
+    for sd in out:
+        key = ' '.join(_REP_WORD.findall(str(sd.get('text', '')).lower()))
+        if not key:
+            continue
+        if key == run_key:
+            run_len += 1
+            if run_len > max_same_lines:
+                continue
+        else:
+            run_key, run_len = key, 1
+        final.append(sd)
+    return final
+
+
+def _do_transcribe(*args, **kwargs):
+    """Transcribe with the best available engine (see _do_transcribe_raw), then remove repetition loops."""
+    res = _do_transcribe_raw(*args, **kwargs)
+    try:
+        if isinstance(res, dict) and res.get('segments'):
+            before = sum(len(str(x.get('text', ''))) for x in res['segments'])
+            res['segments'] = _clean_repeats(res['segments'])
+            after = sum(len(str(x.get('text', ''))) for x in res['segments'])
+            if after < before:
+                print(f'[CF] removed a repetition loop from the transcript ({before - after} characters)')
+    except Exception as _e:
+        print(f'[CF] repetition cleanup skipped: {_e}')
+    return res
+
+
+def _do_transcribe_raw(vid, model_size, initial_prompt=None, ffmpeg_path=None, progress_cb=None, use_word_timestamps=False, use_gpu=True, log_cb=None):
     """Transcribe with best available backend:
     1. whisper.cpp + Vulkan (AMD/Intel/NVIDIA GPU on Windows — fastest)
     2. faster-whisper + CUDA (NVIDIA only)
@@ -3531,10 +3748,13 @@ def _do_transcribe(vid, model_size, initial_prompt=None, ffmpeg_path=None, progr
                        '-bs', '5',
                        '-l', 'auto',
                        # ── Hallucination suppression ──────────────────────────
-                       '-et', '2.4',    # entropy threshold — kills looping/repetition
+                       '-mc', '0',      # no previous-text context: it fed "that's it, that's it, ..." loops
+                       '-et', '2.4',    # entropy threshold
                        '-lpt', '-0.7',  # logprob threshold — drops low-confidence segments
                        '-wt', '0.01',   # word threshold — avoids near-silence transcription
-                       '--no-fallback', # skip temperature fallback that causes hallucinations
+                       '--no-fallback', # kept: with temperature fallback ON, tests on real clips dropped whole
+                                        # sentences and looped across segments instead. Loops that remain are
+                                        # removed afterwards by _clean_repeats.
                        # NOTE: a '-vth' flag used to be passed here. whisper-cli has no such option
                        # (only -vt/--vad-threshold, which needs --vad and a VAD model), so it exited
                        # with "unknown argument" and every GPU transcription fell back to slow CPU.
@@ -3978,7 +4198,9 @@ def _do_transcribe(vid, model_size, initial_prompt=None, ffmpeg_path=None, progr
             _wa.FFMPEG_PATH = ffmpeg_path
         except Exception: pass
 
-    opts = {'verbose': False, 'word_timestamps': use_word_timestamps, 'fp16': False}
+    opts = {'verbose': False, 'word_timestamps': use_word_timestamps, 'fp16': False,
+            'condition_on_previous_text': False,      # same anti-loop settings as faster-whisper
+            'compression_ratio_threshold': 2.4, 'logprob_threshold': -0.7, 'no_speech_threshold': 0.6}
     if initial_prompt:
         opts['initial_prompt'] = initial_prompt
     with _wn.catch_warnings():
@@ -5398,6 +5620,8 @@ class App(tk.Tk):
             ('censor',      '🔇', 'Censor'),
             ('music',       '🎵', 'Music Removal'),
         ]
+        if not EDITOR_ENABLED:
+            TABS = [t for t in TABS if t[0] != 'editor']
         for key, icon, label in TABS:
             cell = tk.Frame(nb_bar, bg=BG2)
             cell.pack(side='left', fill='x', expand=True)
@@ -6561,11 +6785,14 @@ class App(tk.Tk):
                 meta += f'   👁 {int(it["views"]):,} views'
             tk.Label(info, text=meta, font=('Segoe UI', 8), fg=FG2, bg=BG2, anchor='w').pack(anchor='w', pady=(2, 0))
             btns = tk.Frame(card, bg=BG2); btns.pack(side='right', padx=8, pady=8)
-            for text, bg, fg, cmd in (
+            _br_btns = [
                     ('▶ Load', ACCENT, '#000', lambda u=url, t=title: self._br_load(u, t)),
                     ('🎬 Edit', BG3, ACCENT, lambda u=url, t=title: self._ed_load_from_kick(u, t)),
                     ('⬇ Download', BG3, GREEN, lambda u=url: self._br_download(u)),
-                    ('➕ Queue', BG3, FG2, lambda u=url: self._br_queue(u))):
+                    ('➕ Queue', BG3, FG2, lambda u=url: self._br_queue(u))]
+            if not EDITOR_ENABLED:
+                _br_btns = [b for b in _br_btns if b[0] != '🎬 Edit']
+            for text, bg, fg, cmd in _br_btns:
                 tk.Button(btns, text=text, font=FONT_SMALL, bg=bg, fg=fg, relief='flat', bd=0, cursor='hand2',
                           padx=10, pady=3, command=cmd).pack(fill='x', pady=(0, 3))
             th.bind('<Button-1>', lambda e, u=url, t=title: self._br_load(u, t))
@@ -7901,6 +8128,37 @@ class App(tk.Tk):
         _thr.Thread(target=_work, daemon=True).start()
         self.after(20000, app_mark_healthy)                       # a stable 45s = the update is confirmed good
 
+    def _show_guide(self):
+        """Small window with GUIDE_SECTIONS ('What is what')."""
+        w = getattr(self, '_guide_win', None)
+        try:
+            if w is not None and w.winfo_exists():
+                w.deiconify(); w.lift(); w.focus_force(); return
+        except Exception:
+            pass
+        w = tk.Toplevel(self); self._guide_win = w
+        w.title('ClipFinder - What is what'); w.configure(bg=BG)
+        w.geometry(f'{_ui_px(720)}x{_ui_px(640)}')
+        try:
+            w.iconbitmap(str(_PathBase(__file__).with_name('clipfinder.ico')))
+        except Exception:
+            pass
+        txt = tk.Text(w, bg=BG2, fg=FG, wrap='word', relief='flat', bd=0, padx=_ui_px(18), pady=_ui_px(14),
+                      font=('Segoe UI', 10), cursor='arrow', highlightthickness=0)
+        sb = ttk.Scrollbar(w, orient='vertical', command=txt.yview)
+        txt.configure(yscrollcommand=sb.set)
+        sb.pack(side='right', fill='y'); txt.pack(side='left', fill='both', expand=True)
+        txt.tag_configure('h', font=('Segoe UI', 11, 'bold'), foreground=ACCENT, spacing1=_ui_px(14), spacing3=_ui_px(4))
+        txt.tag_configure('k', font=('Segoe UI', 10, 'bold'), foreground=FG, lmargin1=_ui_px(4))
+        txt.tag_configure('v', foreground=FG2, lmargin1=_ui_px(22), lmargin2=_ui_px(22), spacing3=_ui_px(6))
+        for head, rows in GUIDE_SECTIONS:
+            txt.insert('end', head + '\n', 'h')
+            for k, v in rows:
+                txt.insert('end', k + '\n', 'k')
+                txt.insert('end', v + '\n', 'v')
+        txt.configure(state='disabled')
+        txt.bind('<MouseWheel>', lambda e: (txt.yview_scroll(int(-e.delta / 120), 'units'), 'break')[1])
+
     # ── Settings: Update Center ───────────────────────────────────────────────
     def _build_update_center(self, section):
         """Builds the ClipFinder Update + Update Modules + Music Removal engine sections."""
@@ -8093,8 +8351,8 @@ class App(tk.Tk):
         for w in self._uc_table.winfo_children():
             w.destroy()
         self._uc_rows = rows
-        icon = {'ok': ('✅', GREEN), 'missing': ('○', FG3), 'below': ('⚠', YELLOW), 'outdated': ('⬆', ACCENT2), 'newer': ('•', FG2)}
-        action = {'missing': '⬇ Install', 'below': '⬆ Fix', 'outdated': '⬆ Update', 'newer': '⬆ Upgrade', 'ok': '↻'}
+        icon = {'ok': ('✅', GREEN), 'missing': ('○', FG3), 'below': ('⚠', YELLOW), 'broken': ('⚠', RED), 'outdated': ('⬆', ACCENT2), 'newer': ('•', FG2)}
+        action = {'missing': '⬇ Install', 'below': '⬆ Fix', 'broken': '🔧 Repair', 'outdated': '⬆ Update', 'newer': '⬆ Upgrade', 'ok': '↻'}
         group = None
         todo = 0
         for r in rows:
@@ -8108,15 +8366,17 @@ class App(tk.Tk):
             tk.Label(fr, text=r['name'], font=('Consolas', 8, 'bold'), fg=FG if r['installed'] else FG2, bg=BG3,
                      width=22, anchor='w').pack(side='left')
             inst = r['installed'] or ('not installed' + ('' if r['required'] else ' (optional)'))
+            if r['state'] == 'broken':
+                inst = f'{inst} - files missing'
             latest = f'  →  {r["latest"]}' if (checked and r['latest'] and r['state'] in ('outdated', 'below', 'newer')) else ''
             tk.Label(fr, text=f'{inst}{latest}', font=('Consolas', 8), fg=col if r['state'] != 'ok' else FG2, bg=BG3,
                      width=34, anchor='w').pack(side='left')
             tk.Label(fr, text=r.get('desc', ''), font=('Segoe UI', 7), fg=FG3, bg=BG3, anchor='w').pack(side='left', fill='x', expand=True)
-            b = tk.Button(fr, text=action[r['state']], font=('Segoe UI', 8), bg=(ACCENT if r['state'] in ('missing', 'below', 'outdated') else BG4),
-                          fg=('#000' if r['state'] in ('missing', 'below', 'outdated') else FG2), relief='flat', bd=0,
+            b = tk.Button(fr, text=action.get(r['state'], '↻'), font=('Segoe UI', 8), bg=(ACCENT if r['state'] in ('missing', 'below', 'broken', 'outdated') else BG4),
+                          fg=('#000' if r['state'] in ('missing', 'below', 'broken', 'outdated') else FG2), relief='flat', bd=0,
                           cursor='hand2', padx=8, pady=1, command=lambda e=r: self._uc_do([e], e['name']))
             b.pack(side='right')
-            if r['state'] in ('missing', 'below', 'outdated') and (r['required'] or r['state'] != 'missing'):
+            if r['state'] in ('missing', 'below', 'broken', 'outdated') and (r['required'] or r['state'] != 'missing'):
                 todo += 1
         self._uc_btn_all.config(text=f'⬆  Update all ({todo})' if todo else '⬆  Update all')
         if checked and not todo:
@@ -8127,7 +8387,7 @@ class App(tk.Tk):
 
     def _uc_update_all(self):
         rows = [r for r in (self._uc_rows or pm_plan(online=False))
-                if r['state'] in ('below', 'outdated') or (r['state'] == 'missing' and r['required'])]
+                if r['state'] in ('below', 'broken', 'outdated') or (r['state'] == 'missing' and r['required'])]
         if not rows:
             messagebox.showinfo('Update all', 'Everything is up to date. Use "Check for updates" to look for newer versions.')
             return
@@ -8135,7 +8395,7 @@ class App(tk.Tk):
 
     def _uc_install_required(self):
         """Used by the first-run prompt: install every required module that is missing."""
-        rows = [r for r in pm_plan(online=False) if r['state'] in ('missing', 'below') and r['required']]
+        rows = [r for r in pm_plan(online=False) if r['state'] in ('missing', 'below', 'broken') and r['required']]
         if rows:
             self._uc_do(rows, 'required modules')
 
@@ -16633,6 +16893,10 @@ Return ONLY the JSON array, no other text."""
 
 
 
+        _gs = section('❓  What is what', 'A short guide to the tabs, AI providers, transcription engines, models and components')
+        tk.Button(_gs, text='📖  Open the guide', font=('Segoe UI', 9, 'bold'), bg=ACCENT, fg='#000', relief='flat', bd=0,
+                  cursor='hand2', padx=12, pady=5, command=self._show_guide).pack(anchor='w')
+
         self._build_update_center(section)
 
         # ── Core Dependencies ──
@@ -16685,10 +16949,14 @@ Return ONLY the JSON array, no other text."""
             # Python packages
             _ensure_pkgs_on_path()  # make sure pkgs dir is on path
             for pkg, _dist in [('faster_whisper', 'faster-whisper'), ('yt_dlp', 'yt-dlp'),
-                               ('cv2', 'opencv-python'), ('curl_cffi', 'curl-cffi'),
+                               ('cv2', 'opencv-contrib-python'), ('curl_cffi', 'curl-cffi'),
                                ('soundfile', 'soundfile'), ('imagehash', 'imagehash')]:
                 # disk-only: importing these on the UI thread took seconds (cv2, ctranslate2, ...)
-                statuses[pkg] = _dist_version(_dist) is not None
+                # Registry 'alt' names count too: the installer ships opencv-contrib-python, and checking
+                # only 'opencv-python' showed OpenCV as missing, inviting a conflicting second install.
+                _ent_s = pm_entry(_dist)
+                _names_s = [_dist] + (list(_ent_s.get('alt', [])) if _ent_s else [])
+                statuses[pkg] = any(_dist_version(n) is not None for n in _names_s)
             return statuses
 
         # Status display frame
@@ -16712,7 +16980,7 @@ Return ONLY the JSON array, no other text."""
                 ('ggml-medium',   'ggml-medium',    'Whisper medium model (~1.5GB)'),
                 ('faster_whisper','faster-whisper', 'CUDA/CPU transcription fallback'),
                 ('yt_dlp',        'yt-dlp',         'Video downloader'),
-                ('cv2',           'opencv-python',  'Video frame processing'),
+                ('cv2',           'opencv',         'Video frame processing'),
                 ('curl_cffi',     'curl-cffi',      'Kick/Cloudflare bypass — v0.10 to 0.17 (what yt-dlp accepts)'),
                 ('soundfile',     'soundfile',       'Audio processing for censor'),
                 ('imagehash',     'imagehash',       'Image deduplication for thumbnails'),
@@ -16720,7 +16988,7 @@ Return ONLY the JSON array, no other text."""
             # pip-installable packages that can have an inline install button
             _pip_map = {
                 'faster_whisper': 'faster-whisper',
-                'cv2':            'opencv-python',
+                'cv2':            'opencv-contrib-python',
                 'soundfile':      'soundfile',
                 'curl_cffi':      'curl-cffi',
                 'yt_dlp':         'yt-dlp',
@@ -16736,6 +17004,29 @@ Return ONLY the JSON array, no other text."""
                         self.set_progress(f'⬇ Installing {pip_pkg}...', pct=5),
                         self.log(f'⬇ Installing {pip_pkg} to {PKGS_DIR}...', ACCENT2)
                     ))
+                    # Registry packages go through the update manager: downloaded and import-tested in a
+                    # staging folder, swapped in at the next start. A direct `pip install --target PKGS_DIR`
+                    # while ClipFinder runs fails with "Access is denied" on loaded .pyd files (numpy, cv2...)
+                    # and can leave a half-installed package behind.
+                    _ent_st = pm_entry(pip_pkg)
+                    if _ent_st is not None:
+                        _res_st = pm_stage([_ent_st], on_line=lambda ln: self.after(0, lambda l=ln: self.set_progress(str(l)[:90])))
+                        _ok_st = bool(_res_st) and all(r.get('ok') for r in _res_st)
+                        _err_st = '; '.join(r.get('error', '') for r in _res_st if not r.get('ok'))
+                        def _done_st(ok=_ok_st, pkg=pip_pkg, err=_err_st):
+                            if ok:
+                                self.set_progress(f'✅ {pkg} downloaded - restart ClipFinder to finish', pct=100)
+                                self.log(f'✅ {pkg} downloaded and tested - it is switched on the next time you start ClipFinder', GREEN)
+                                btn_widget.config(text='↻ Restart to finish', bg=BG4, fg=FG2, state='normal',
+                                                  command=lambda: (self._save_settings(), self._relaunch_app()))
+                                try: self._uc_refresh_pending()
+                                except Exception: pass
+                            else:
+                                self.set_progress(f'❌ {pkg} failed', pct=0)
+                                self.log(f'❌ {pkg}: {err}', RED)
+                                btn_widget.config(text='⬇ Retry', bg=ACCENT, fg='#000', state='normal')
+                        self.after(0, _done_st)
+                        return
                     import subprocess as _sp3
                     _nodeps2 = pip_pkg in {'faster-whisper', 'openai-whisper'}
                     # Use the registry's version range (e.g. curl-cffi >=0.10,<0.18) instead of a bare/unpinned name
@@ -18236,7 +18527,9 @@ Return ONLY the JSON array, no other text."""
                                 _segs_iter, _info = _fwc.transcribe(
                                     _wav_tmp, word_timestamps=True,
                                     initial_prompt='Transcribe every word exactly as spoken including profanity.',
-                                    language=None, vad_filter=True)
+                                    language=None, vad_filter=True,
+                                    condition_on_previous_text=False,   # anti-loop, as in _do_transcribe
+                                    compression_ratio_threshold=2.4)
                                 _segs = []
                                 for _seg in _segs_iter:
                                     _sd = {'start': _seg.start, 'end': _seg.end, 'text': _seg.text}
@@ -18244,7 +18537,7 @@ Return ONLY the JSON array, no other text."""
                                         _sd['words'] = [{'word': w.word, 'start': w.start, 'end': w.end}
                                                        for w in _seg.words]
                                     _segs.append(_sd)
-                                result = {'segments': _segs, 'language': _info.language}
+                                result = {'segments': _clean_repeats(_segs), 'language': _info.language}
                             finally:
                                 try: os.unlink(_wav_tmp)
                                 except OSError: pass
