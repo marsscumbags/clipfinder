@@ -11,7 +11,8 @@
 
 ### ✨ Changes
 - Editor tab switched off (`EDITOR_ENABLED = False`): hidden from the tab bar and the channel browser's Edit button; code kept.
-- Settings → **What is what**: guide window (`GUIDE_SECTIONS`) for tabs, providers, engines, models and components.
+- **How to use** tutorial (`TUTORIAL_STEPS`, `_show_tutorial`): 7 steps with action buttons (key pages, jump to Settings → API Keys scrolled to the top, Clip Finder, guide). Opens on first start or while no AI key is saved (until "Don't show at start" / Done sets `tutorial_done`); header button ❓ How to use. The old first-run package prompt never fired on installer builds (packages are bundled).
+- Settings → **Help**: tutorial + What is what guide window (`GUIDE_SECTIONS`) for tabs, providers, engines, models and components.
 
 ## v1.4.0.2 — November 2026
 

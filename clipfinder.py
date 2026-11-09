@@ -2228,6 +2228,73 @@ GUIDE_SECTIONS = [
 ]
 
 
+# ── Getting-started tutorial (first start, and the "How to use" button in the header) ──
+# Each step: title, body text, and buttons as (label, action). Actions are handled in App._tut_action.
+TUTORIAL_STEPS = [
+    ('Welcome to ClipFinder',
+     'ClipFinder watches a stream or VOD for you, finds the best moments with AI, and cuts them into clips '
+     'ready to post.\n\n'
+     'It takes about two minutes to set up. You only need one thing: a free AI key.\n\n'
+     'Click Next to get started.',
+     []),
+    ('Step 1 - Get a free AI key',
+     'ClipFinder uses an AI to read the transcript and pick the moments. You bring your own key, and all '
+     'three providers below have a free tier (no credit card).\n\n'
+     '  -  Google Gemini (recommended): sign in with a Google account, click "Create API key", copy it.\n'
+     '  -  Groq: very fast, sign up and create a key.\n'
+     '  -  OpenRouter: free models from several companies.\n\n'
+     'One key is enough. Adding a second one helps: when one runs out of free uses, ClipFinder switches to '
+     'the next.',
+     [('🔑  Get a Gemini key', 'url:https://aistudio.google.com/apikey'),
+      ('Groq key', 'url:https://console.groq.com/keys'),
+      ('OpenRouter key', 'url:https://openrouter.ai/keys')]),
+    ('Step 2 - Paste your key',
+     'Open Settings (the ⚙ gear at the bottom right of the window). The first box is "AI Provider API Keys".\n\n'
+     '  1.  Paste your key in the matching row (Gemini, Groq or OpenRouter).\n'
+     '  2.  Click "Save & Apply".\n'
+     '  3.  Under "AI Provider Status" the provider should now say  ✓ Ready.\n\n'
+     'Your keys are stored only on this PC and are sent only to the AI provider you picked. '
+     '"Export All Keys" makes a backup file you can import on another PC.',
+     [('⚙  Open Settings → API Keys', 'settings')]),
+    ('Step 3 - Find clips',
+     'Go to the Clip Finder tab.\n\n'
+     '  1.  Video: paste a link (Kick, Twitch, YouTube, X) or click 📁 to pick a video file.\n'
+     '  2.  Instructions (optional): tell the AI what you want, like "focus on drama" or '
+     '"only clips of [name]". "ignore last hour" skips the end of a long VOD.\n'
+     '  3.  Mode: Normal for most streams, Interview for back-and-forth talks, Vision to also look at the picture.\n'
+     '  4.  Click  ▶ FIND CLIPS.  ClipFinder downloads, transcribes and asks the AI. A long VOD takes a while; '
+     'progress shows at the top.',
+     [('✂  Go to Clip Finder', 'tab:clips')]),
+    ('Step 4 - Cut and export',
+     'The AI suggestions appear in a list with a score and a short description.\n\n'
+     '  -  Tick the clips you want (or ☑ Select All) and click  ✂ EXPORT SELECTED.\n'
+     '  -  ⚡ AUTO-CUT BEST 3 cuts the top three straight away.\n'
+     '  -  16:9 / 9:16 / Both: landscape, vertical for TikTok / Shorts, or both.\n'
+     '  -  Clips are saved in the Output folder (top right of the tab).\n\n'
+     'Want captions for them? The Post Studio tab writes posts for TikTok, Instagram, YouTube and X.',
+     []),
+    ('The other tabs',
+     '  -  Transcript: turn any video into text with timestamps.\n'
+     '  -  Post Studio: captions and posts for your clips.\n'
+     '  -  Downloader: download links, or browse a Kick / Twitch / YouTube channel.\n'
+     '  -  Thumbnails: find images for thumbnails (beta).\n'
+     '  -  Studio: duplicate image finder and image upscaler.\n'
+     '  -  Censor: beep or mute swear words.\n'
+     '  -  Music Removal: remove background music, keep the voices.\n\n'
+     'Settings → "What is what" explains every part of the app, including the transcription engines and '
+     'Whisper models.',
+     [('📖  What is what', 'guide')]),
+    ('Good to know',
+     '  -  Transcription speed: Settings → Transcription Settings. "Auto" picks a Whisper model for your PC; '
+     'base is a good balance, tiny is fastest but makes more mistakes.\n'
+     '  -  Kick, YouTube HD or X downloads failing? Add cookies in Settings → Cookies.\n'
+     '  -  Updates: a green bar at the bottom tells you when a new version is out.\n'
+     '  -  Open this tutorial again any time with the  ❓ How to use  button at the top right.\n\n'
+     'That is it - have fun clipping!',
+     [('⚙  Open Settings', 'settings')]),
+]
+
+
 # ── Feature switches ──────────────────────────────────────────────────────────
 # Editor tab (inline VLC video editor) is switched off for now: it is hidden from the tab bar and the
 # channel browser's "Edit" button is removed. The code is untouched - set True to bring it back.
@@ -5355,6 +5422,7 @@ class App(tk.Tk):
         except Exception:
             pass
         self.after(25000, self._uc_background)
+        self.after(1800, self._maybe_show_tutorial)
 
         def _on_close():
             # Kill any running whisper.cpp subprocess
@@ -5465,6 +5533,10 @@ class App(tk.Tk):
         _ms_lbl.bind('<Button-1>', lambda e: __import__('webbrowser').open('https://x.com/MarsScumbags'))
         tk.Label(hdr, text=f'v{APP_VERSION}', font=('Segoe UI', 8),
                 fg=FG3, bg=BG2).pack(side='right', padx=(0, _ui_px(4)))
+        tk.Button(hdr, text='❓  How to use', font=('Segoe UI', 8, 'bold'), fg=FG, bg=BG4,
+                  activebackground=BG3, activeforeground=FG, relief='flat', bd=0, cursor='hand2',
+                  padx=_ui_px(10), pady=_ui_px(3),
+                  command=lambda: self._show_tutorial(0)).pack(side='right', padx=(0, _ui_px(10)))
         self._gpu_badge = tk.Label(hdr, text='⚡ GPU', font=('Segoe UI', 7, 'bold'),
                  fg='#000', bg=ACCENT, padx=6, pady=1)
         self._gpu_badge.pack(side='right', padx=(0, _ui_px(8)))
@@ -8127,6 +8199,126 @@ class App(tk.Tk):
                 um_log(f'background update check failed: {e}')
         _thr.Thread(target=_work, daemon=True).start()
         self.after(20000, app_mark_healthy)                       # a stable 45s = the update is confirmed good
+
+    def _tut_action(self, act):
+        if act.startswith('url:'):
+            __import__('webbrowser').open(act[4:])
+        elif act == 'settings':
+            self._switch_nb('settings')
+            self.after(150, self._settings_scroll_top)
+        elif act.startswith('tab:'):
+            self._switch_nb(act[4:])
+        elif act == 'guide':
+            self._show_guide()
+
+    def _settings_scroll_top(self):
+        """Scroll the Settings page to the top (the API keys box)."""
+        def _walk(w):
+            for c in w.winfo_children():
+                if c.winfo_class() == 'Canvas':
+                    try:
+                        c.yview_moveto(0)
+                    except Exception:
+                        pass
+                _walk(c)
+        try:
+            _walk(self.nb_frames['settings'])
+        except Exception:
+            pass
+
+    def _show_tutorial(self, step=0):
+        """Step-by-step 'how to use' window (TUTORIAL_STEPS). Shown on first start and from the header."""
+        w = getattr(self, '_tut_win', None)
+        try:
+            if w is not None and w.winfo_exists():
+                w.deiconify(); w.lift(); w.focus_force(); return
+        except Exception:
+            pass
+        w = tk.Toplevel(self); self._tut_win = w
+        w.title('ClipFinder - How to use'); w.configure(bg=BG2)
+        W, H = _ui_px(640), _ui_px(500)
+        try:
+            x = self.winfo_rootx() + max(0, (self.winfo_width() - W) // 2)
+            y = self.winfo_rooty() + max(0, (self.winfo_height() - H) // 3)
+            w.geometry(f'{W}x{H}+{x}+{y}')
+        except Exception:
+            w.geometry(f'{W}x{H}')
+        w.transient(self)
+        try:
+            w.iconbitmap(str(_PathBase(__file__).with_name('clipfinder.ico')))
+        except Exception:
+            pass
+        tk.Frame(w, bg=ACCENT, height=_ui_px(3)).pack(fill='x')
+        head = tk.Frame(w, bg=BG2); head.pack(fill='x', padx=_ui_px(22), pady=(_ui_px(16), 0))
+        prog = tk.Label(head, font=('Segoe UI', 8, 'bold'), fg=FG3, bg=BG2); prog.pack(anchor='w')
+        title = tk.Label(head, font=('Segoe UI', 15, 'bold'), fg=ACCENT, bg=BG2, anchor='w', justify='left')
+        title.pack(anchor='w', pady=(_ui_px(2), 0))
+        body = tk.Label(w, font=('Segoe UI', 10), fg=FG, bg=BG2, anchor='nw', justify='left',
+                        wraplength=W - _ui_px(50))
+        body.pack(fill='both', expand=True, padx=_ui_px(22), pady=(_ui_px(10), 0))
+        acts = tk.Frame(w, bg=BG2); acts.pack(fill='x', padx=_ui_px(22), pady=(0, _ui_px(8)))
+        tk.Frame(w, bg=BORDER, height=1).pack(fill='x')
+        nav = tk.Frame(w, bg=BG3); nav.pack(fill='x')
+        v_hide = tk.BooleanVar(value=bool(self.cfg.get('tutorial_done')))
+        tk.Checkbutton(nav, text="Don't show at start", variable=v_hide, font=('Segoe UI', 8), fg=FG2, bg=BG3,
+                       selectcolor=BG4, activebackground=BG3, activeforeground=FG, bd=0,
+                       highlightthickness=0).pack(side='left', padx=_ui_px(14), pady=_ui_px(10))
+        dots = tk.Frame(nav, bg=BG3); dots.pack(side='left', expand=True)
+        b_next = tk.Button(nav, font=('Segoe UI', 9, 'bold'), bg=ACCENT, fg='#000', relief='flat', bd=0,
+                           cursor='hand2', padx=_ui_px(16), pady=_ui_px(5))
+        b_next.pack(side='right', padx=(0, _ui_px(14)), pady=_ui_px(8))
+        b_back = tk.Button(nav, text='←  Back', font=('Segoe UI', 9), bg=BG4, fg=FG2, relief='flat', bd=0,
+                           cursor='hand2', padx=_ui_px(12), pady=_ui_px(5))
+        b_back.pack(side='right', padx=_ui_px(6), pady=_ui_px(8))
+        cur = {'i': max(0, min(step, len(TUTORIAL_STEPS) - 1))}
+
+        def _close():
+            try:
+                self.cfg['tutorial_done'] = bool(v_hide.get())
+                save_cfg(self.cfg)
+            except Exception:
+                pass
+            w.destroy()
+
+        def _show(i):
+            cur['i'] = i
+            t, txt, buttons = TUTORIAL_STEPS[i]
+            prog.config(text=f'{i + 1} / {len(TUTORIAL_STEPS)}')
+            title.config(text=t)
+            body.config(text=txt)
+            for c in acts.winfo_children():
+                c.destroy()
+            for k, (lbl, act) in enumerate(buttons):
+                tk.Button(acts, text=lbl, font=('Segoe UI', 9, 'bold' if k == 0 else 'normal'),
+                          bg=ACCENT2 if k == 0 else BG4, fg='#000' if k == 0 else FG, relief='flat', bd=0,
+                          cursor='hand2', padx=_ui_px(12), pady=_ui_px(5),
+                          command=lambda a=act: self._tut_action(a)).pack(side='left', padx=(0, _ui_px(6)))
+            for c in dots.winfo_children():
+                c.destroy()
+            for k in range(len(TUTORIAL_STEPS)):
+                tk.Label(dots, text='●', font=('Segoe UI', 7), bg=BG3,
+                         fg=ACCENT if k == i else FG3).pack(side='left', padx=1)
+            b_back.config(state='normal' if i > 0 else 'disabled', command=lambda: _show(i - 1))
+            last = i == len(TUTORIAL_STEPS) - 1
+            b_next.config(text='Done  ✓' if last else 'Next  →',
+                          command=(lambda: (v_hide.set(True), _close())) if last else (lambda: _show(i + 1)))
+
+        w.protocol('WM_DELETE_WINDOW', _close)
+        w.bind('<Right>', lambda e: cur['i'] < len(TUTORIAL_STEPS) - 1 and _show(cur['i'] + 1))
+        w.bind('<Left>', lambda e: cur['i'] > 0 and _show(cur['i'] - 1))
+        w.bind('<Escape>', lambda e: _close())
+        _show(cur['i'])
+
+    def _maybe_show_tutorial(self):
+        """First start (or no AI key saved yet): open the tutorial, unless the user turned it off."""
+        try:
+            if self.cfg.get('tutorial_done'):
+                return
+            no_key = not any(str(self.cfg.get(k, '')).strip() for k in ('key_gemini', 'key_groq', 'key_openrouter'))
+            if no_key or int(self.cfg.get('launch_count', 0)) <= 1:
+                self._show_tutorial(0 if no_key else 0)
+        except Exception as _e:
+            print(f'[CF] tutorial skipped: {_e}')
 
     def _show_guide(self):
         """Small window with GUIDE_SECTIONS ('What is what')."""
@@ -16893,9 +17085,12 @@ Return ONLY the JSON array, no other text."""
 
 
 
-        _gs = section('❓  What is what', 'A short guide to the tabs, AI providers, transcription engines, models and components')
-        tk.Button(_gs, text='📖  Open the guide', font=('Segoe UI', 9, 'bold'), bg=ACCENT, fg='#000', relief='flat', bd=0,
-                  cursor='hand2', padx=12, pady=5, command=self._show_guide).pack(anchor='w')
+        _gs = section('❓  Help', 'Step-by-step tutorial, and a guide to the tabs, AI providers, transcription engines, models and components')
+        _gsb = tk.Frame(_gs, bg=BG3); _gsb.pack(anchor='w')
+        tk.Button(_gsb, text='❓  How to use (step by step)', font=('Segoe UI', 9, 'bold'), bg=ACCENT, fg='#000', relief='flat',
+                  bd=0, cursor='hand2', padx=12, pady=5, command=lambda: self._show_tutorial(0)).pack(side='left')
+        tk.Button(_gsb, text='📖  What is what', font=('Segoe UI', 9), bg=BG4, fg=FG, relief='flat', bd=0,
+                  cursor='hand2', padx=12, pady=5, command=self._show_guide).pack(side='left', padx=6)
 
         self._build_update_center(section)
 

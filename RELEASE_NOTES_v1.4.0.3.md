@@ -11,7 +11,8 @@ Fixes for transcripts that repeat themselves and for component installs that fai
 
 ## Changed
 - **The Editor tab is switched off for now.** It is hidden, along with the "Edit" button in the channel browser.
-- **New: Settings → What is what.** A short guide to the tabs, AI providers, transcription engines, Whisper models and components.
+- **New: How to use.** A step-by-step tutorial: get a free AI key (buttons open the Gemini, Groq and OpenRouter key pages), paste it in Settings (a button jumps straight to the API Keys box), find clips, cut and export them, and what the other tabs do. It opens on first start and whenever no AI key is saved yet, and any time from the new **❓ How to use** button at the top right.
+- **New: Settings → Help → What is what.** A reference for the tabs, AI providers, transcription engines, Whisper models and components.
 
 ## Upgrading
 Update from inside the app (banner or Settings → Update Center), or download `ClipFinder-Setup.exe` below.
