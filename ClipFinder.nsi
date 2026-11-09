@@ -11,7 +11,7 @@
 ; ============================================================
 
 !define APP_NAME     "ClipFinder"
-!define APP_VERSION "1.4.0.3"
+!define APP_VERSION "1.4.0.4"
 ; No launcher EXE since 1.4.0.2: the PyInstaller --onefile launcher (clipfinder.exe) was quarantined by
 ; Microsoft Defender as "PUA: Settings Modifier" (unsigned self-extracting bootloader that spawns a hidden
 ; python). The shortcuts now start the embedded, PSF-signed pythonw.exe with clipfinder.py directly.
@@ -20,7 +20,7 @@
 !define APP_SCRIPT   "clipfinder.py"
 !define INSTALL_DIR  "$LOCALAPPDATA\ClipFinder"
 !define PUBLISHER    "MarsScumbags"
-!define WEBSITE      "https://github.com/thatspeedykid/clipfinder"
+!define WEBSITE      "https://github.com/marsscumbags/clipfinder"
 
 Name          "${APP_NAME} ${APP_VERSION}"
 BrandingText  "${APP_NAME} ${APP_VERSION}"

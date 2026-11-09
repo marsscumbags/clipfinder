@@ -1,5 +1,10 @@
 # ClipFinder Changelog
 
+## v1.4.0.4 — November 2026
+
+### 🔧 Changes
+- GitHub account renamed `thatspeedykid` → `marsscumbags`: `APP_REPO`, the vision_refs bootstrap URLs, the OpenRouter `HTTP-Referer`, the installer `WEBSITE` and README links now use `marsscumbags/clipfinder`. Verified 2026-11-09 that the old-name API / raw / release-asset URLs used by older builds redirect, and the new ones answer directly. The Kick edition files are unchanged.
+
 ## v1.4.0.3 — November 2026
 
 ### 🐛 Bug Fixes

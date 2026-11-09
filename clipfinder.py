@@ -6,7 +6,7 @@ When running as EXE: the app launches immediately.
 Use Settings → Update Modules to install AI/transcription packages.
 """
 
-APP_VERSION = "1.4.0.3"
+APP_VERSION = "1.4.0.4"
 
 import subprocess
 import sys
@@ -222,7 +222,7 @@ ENVS_DIR        = USER_DIR / 'envs'
 UPDATE_LOG      = USER_DIR / 'update.log'
 _UM_PYPI_CACHE  = USER_DIR / 'pypi_cache.json'
 CPU_TORCH_INDEX = 'https://download.pytorch.org/whl/cpu'
-APP_REPO        = 'thatspeedykid/clipfinder'
+APP_REPO        = 'marsscumbags/clipfinder'
 _UM_UA          = 'ClipFinder-Updater'
 _UM_CNW         = 0x08000000 if _um_os.name == 'nt' else 0        # CREATE_NO_WINDOW
 
@@ -2642,7 +2642,7 @@ def _openrouter_complete(key, role, messages, max_tokens, temperature=None, mode
             body['temperature'] = temperature
         r = _rq.post('https://openrouter.ai/api/v1/chat/completions',
                      headers={'Authorization': f'Bearer {key}', 'Content-Type': 'application/json',
-                              'HTTP-Referer': 'https://github.com/thatspeedykid/clipfinder'},
+                              'HTTP-Referer': 'https://github.com/marsscumbags/clipfinder'},
                      json=body, timeout=timeout)
         try:
             j = r.json()
@@ -19226,9 +19226,9 @@ if __name__ == '__main__':
     _vr_dir = USER_DIR / 'vision_refs'
     _vr_dir.mkdir(parents=True, exist_ok=True)
     _ref_urls = {
-        'stake_casino.png':   'https://raw.githubusercontent.com/thatspeedykid/clipfinder/main/vision_refs/stake_casino.png',
-        'roobet_casino.png':  'https://raw.githubusercontent.com/thatspeedykid/clipfinder/main/vision_refs/roobet_casino.png',
-        'rainbet_casino.png': 'https://raw.githubusercontent.com/thatspeedykid/clipfinder/main/vision_refs/rainbet_casino.png',
+        'stake_casino.png':   'https://raw.githubusercontent.com/marsscumbags/clipfinder/main/vision_refs/stake_casino.png',
+        'roobet_casino.png':  'https://raw.githubusercontent.com/marsscumbags/clipfinder/main/vision_refs/roobet_casino.png',
+        'rainbet_casino.png': 'https://raw.githubusercontent.com/marsscumbags/clipfinder/main/vision_refs/rainbet_casino.png',
     }
     import threading as _ref_thr
     def _dl_default_refs():

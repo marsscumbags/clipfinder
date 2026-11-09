@@ -6,13 +6,13 @@
 ### AI-Powered Clip Extractor & Social Media Engine
 #### by [@MarsScumbags](https://linktr.ee/marsscumbags)
 
-[![Version](https://img.shields.io/badge/version-1.4.0.3-orange)](https://github.com/thatspeedykid/clipfinder/releases)
-[![Platform](https://img.shields.io/badge/platform-Windows-blue)](https://github.com/thatspeedykid/clipfinder/releases)
+[![Version](https://img.shields.io/badge/version-1.4.0.4-orange)](https://github.com/marsscumbags/clipfinder/releases)
+[![Platform](https://img.shields.io/badge/platform-Windows-blue)](https://github.com/marsscumbags/clipfinder/releases)
 [![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
 **Go from raw VOD to viral clip to posted content — without leaving the app.**
 
-[⬇ Download](https://github.com/thatspeedykid/clipfinder/releases/latest) · [🐛 Report Bug](https://github.com/thatspeedykid/clipfinder/issues) · [Follow @MarsScumbags](https://linktr.ee/marsscumbags)
+[⬇ Download](https://github.com/marsscumbags/clipfinder/releases/latest) · [🐛 Report Bug](https://github.com/marsscumbags/clipfinder/issues) · [Follow @MarsScumbags](https://linktr.ee/marsscumbags)
 
 </div>
 
@@ -178,7 +178,7 @@ Remove background music while keeping vocals using Demucs AI.
 
 ## Setup
 
-1. Download `ClipFinder-Setup.exe` from [Releases](https://github.com/thatspeedykid/clipfinder/releases/latest)
+1. Download `ClipFinder-Setup.exe` from [Releases](https://github.com/marsscumbags/clipfinder/releases/latest)
 2. Run the installer — torch, faster-whisper, and demucs are **pre-bundled** (no setup wait)
 3. Launch ClipFinder
 4. Go to **Settings** → add API keys:
