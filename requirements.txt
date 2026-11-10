@@ -18,6 +18,10 @@ openai>=3.16,<4
 
 # Transcription (faster-whisper brings ctranslate2 / onnxruntime / av)
 faster-whisper>=1.2.1,<2
+# PyAV 19 removed av.open(metadata_errors=...), which faster-whisper 1.2.1 still passes:
+# every transcription failed. Keep below 19 until faster-whisper supports it
+# (tools/smoke_pkgs.py decodes a real file with faster-whisper to catch this).
+av>=11,<19
 
 # Images / video / audio
 Pillow>=12.3,<13

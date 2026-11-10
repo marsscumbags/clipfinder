@@ -6,7 +6,7 @@ When running as EXE: the app launches immediately.
 Use Settings → Update Modules to install AI/transcription packages.
 """
 
-APP_VERSION = "1.4.0.5"
+APP_VERSION = "1.4.0.6"
 
 import subprocess
 import sys
@@ -18,6 +18,14 @@ import os
 # client". Copies cost a little disk space and always work. Must be set before huggingface_hub is imported.
 os.environ.setdefault('HF_HUB_DISABLE_SYMLINKS', '1')
 os.environ.setdefault('HF_HUB_DISABLE_SYMLINKS_WARNING', '1')
+
+# Started without a console (the shortcuts run pythonw.exe): sys.stdout / sys.stderr are None, and any
+# library that prints a progress bar (tqdm in openai-whisper's model download, pip, ...) crashed with
+# "'NoneType' object has no attribute 'write'". Give them a sink that swallows the output.
+if sys.stdout is None:
+    sys.stdout = open(os.devnull, 'w', encoding='utf-8')
+if sys.stderr is None:
+    sys.stderr = open(os.devnull, 'w', encoding='utf-8')
 
 # Add ClipFinder pkgs to path immediately — before ANY other imports
 # This ensures numpy, cv2, and all packages find each other correctly
@@ -311,6 +319,8 @@ PKG_REGISTRY = [
          required=True, desc='OpenRouter / OpenAI-compatible provider'),
     dict(name='faster-whisper', mod='faster_whisper', group='Transcription', policy='keep', spec='>=1.2.1,<2',
          required=True, desc='Transcription engine (CPU / NVIDIA)'),
+    dict(name='av', mod='av', group='Transcription', policy='keep', spec='>=11,<19', required=True,
+         desc='Audio decoding for faster-whisper (PyAV 19 is not supported by faster-whisper 1.2.1 yet)'),
     dict(name='openai-whisper', mod='whisper', group='Transcription', policy='keep', spec='==20250625',
          required=False, no_deps=True, sdist=True, needs=['torch'],
          deps=['more-itertools', 'numba', 'tiktoken', 'tqdm'],   # its own requirements minus torch (needs) / numpy
@@ -629,12 +639,15 @@ def _pm_explain(tail):
     return last[0][:200]
 
 
-def pm_constraints():
+def pm_constraints(exclude=()):
     """Constraints file pinning the protected packages to what is installed, so a joint resolve never
-    picks an incompatible numpy/torch/... (they are downloaded but skipped at swap time)."""
+    picks an incompatible numpy/torch/... (they are downloaded but skipped at swap time).
+    `exclude`: the packages being installed right now are never pinned to their own current version -
+    that blocked e.g. the av<19 downgrade with "requested av<19, constraint av==19.0.2"."""
+    skip = {_pm_norm(x) for x in exclude}
     lines = []
     for n, vs in pm_installed().items():
-        if n in _PM_PROTECT and vs:
+        if n in _PM_PROTECT and vs and n not in skip:
             lines.append(f'{n.replace("_", "-")}=={vs[-1][0].split("+")[0]}')
     STAGE_DIR.mkdir(parents=True, exist_ok=True)
     f = STAGE_DIR / '_constraints.txt'
@@ -719,7 +732,7 @@ def _pm_stage_group(group, on_line, cancel, also=()):
         if not pm_ensure_build_tools(on_line):
             return dict(ok=False, names=names, error='Could not install the build tools (setuptools) - see update.log')
         cmd += ['--no-build-isolation']
-    cons = pm_constraints()
+    cons = pm_constraints(exclude=names)
     if cons and not any(e.get('no_deps') for e in group):
         cmd += ['-c', str(cons)]
     cmd += [pm_requirement(e) for e in group]
@@ -3661,6 +3674,38 @@ def _smart_cutoff_secs(initial_prompt, duration):
     return cut if cut > 0 else None
 
 
+# ── faster-whisper + PyAV 19 ──────────────────────────────────────────────────
+# faster-whisper 1.2.1 (newest) decodes audio with av.open(..., metadata_errors="ignore"); PyAV 19 removed
+# that argument, so every faster-whisper transcription failed with "open() got an unexpected keyword
+# argument 'metadata_errors'". PyAV is pinned below 19 (requirements.txt / PKG_REGISTRY, and the start-up
+# sync downgrades it), and until that has happened this drops the argument so it works right away.
+class _AvOpenCompat:
+    def __init__(self, av_mod):
+        self._av = av_mod
+
+    def __getattr__(self, name):
+        return getattr(self._av, name)
+
+    def open(self, *a, **kw):
+        try:
+            return self._av.open(*a, **kw)
+        except TypeError as e:
+            if 'metadata_errors' in kw and 'metadata_errors' in str(e):
+                kw.pop('metadata_errors', None)
+                return self._av.open(*a, **kw)
+            raise
+
+
+def _fw_av_compat():
+    """Make faster_whisper.audio work with whatever PyAV is installed (call after importing faster_whisper)."""
+    try:
+        import faster_whisper.audio as _fwa
+        if not isinstance(getattr(_fwa, 'av', None), _AvOpenCompat) and getattr(_fwa, 'av', None) is not None:
+            _fwa.av = _AvOpenCompat(_fwa.av)
+    except Exception as _e:
+        print(f'[CF] PyAV compatibility shim skipped: {_e}')
+
+
 # ── Repetition-loop safety net ────────────────────────────────────────────────
 # Whisper (every engine) sometimes gets stuck and writes one phrase dozens of times ("that's it, that's it,
 # ..."). The engines are configured against it (no previous-text conditioning, entropy/compression
@@ -4140,6 +4185,7 @@ def _do_transcribe_raw(vid, model_size, initial_prompt=None, ffmpeg_path=None, p
     # ── 2. faster-whisper with CUDA/CPU ───────────────────────────────────────
     try:
         _FW = _fresh_import('faster_whisper').WhisperModel
+        _fw_av_compat()
         device, compute_type, device_label = _detect_whisper_device(use_gpu=use_gpu)
         print(f'[CF] Whisper device: {device_label}')
 
@@ -5384,7 +5430,7 @@ class App(tk.Tk):
 
         # Downloader state
         self.v_dl_url      = tk.StringVar()
-        self.v_dl_folder   = tk.StringVar(value=self.cfg.get('dl_folder', str(Path.home() / 'Downloads')))
+        self.v_dl_folder   = tk.StringVar(value=self.cfg.get('dl_folder', ''))   # no default: the user picks
         self.v_dl_quality  = tk.StringVar(value=self.cfg.get('dl_quality', 'best'))
         self.v_cookies     = tk.StringVar(value=self.cfg.get('cookies_file', ''))
         self.v_cookies_browser = tk.StringVar(value=self.cfg.get('cookies_browser', ''))
@@ -5763,6 +5809,7 @@ class App(tk.Tk):
             'settings':   (self._build_settings_tab,),
         }
         self._tab_built = {'clips'}
+        self.after(300, self._install_folder_tags)
 
         for key in _lazy_builders:
             f = tk.Frame(content, bg=BG)
@@ -5782,6 +5829,7 @@ class App(tk.Tk):
                         _lf.destroy()
                     try:
                         builders[0](self.nb_frames[key])
+                        self.after(50, lambda k=key: self._install_folder_tags(self.nb_frames[k]))
                     except Exception as _tab_err:
                         import traceback as _tb
                         print(f'[CF] Tab build error ({key}): {_tab_err}')
@@ -7078,7 +7126,9 @@ class App(tk.Tk):
         if not vid or not Path(vid).exists():
             messagebox.showerror('No video', 'Select a video file first.'); return
         if not out:
-            messagebox.showerror('No output', 'Select an output folder first.'); return
+            out = self._need_folder(self.v_ae_out)
+            if not out:
+                return
         if getattr(self, '_ae_running', False):
             messagebox.showinfo('Busy', 'Auto Edit is already running.'); return
 
@@ -7461,7 +7511,7 @@ class App(tk.Tk):
         # Output folder
         out_row2 = tk.Frame(sub_body, bg=BG); out_row2.pack(fill='x', pady=(0, 8))
         tk.Label(out_row2, text='Save to:', font=FONT_SMALL, fg=FG2, bg=BG, width=7, anchor='w').pack(side='left')
-        self.v_sub_outdir = tk.StringVar(value=self.cfg.get('sub_outdir', str(Path.home() / 'Downloads')))
+        self.v_sub_outdir = tk.StringVar(value=self.cfg.get('sub_outdir', ''))
         out_f2 = tk.Frame(out_row2, bg=BG3); out_f2.pack(side='left', fill='x', expand=True, padx=(0, 6))
         tk.Entry(out_f2, textvariable=self.v_sub_outdir, font=FONT_SMALL,
                  bg=BG3, fg=FG, insertbackground=ACCENT, relief='flat', bd=4).pack(side='left', fill='x', expand=True)
@@ -7748,8 +7798,6 @@ class App(tk.Tk):
             self.v_video.set(p)
             if hasattr(self, '_video_entry'):
                 self._video_entry.config(fg=FG)
-            if not self.v_outdir.get():
-                self.v_outdir.set(str(Path(p).parent))
 
     def _cancel_clip_download(self):
         """Cancel download triggered from the Clip Finder video field."""
@@ -7768,7 +7816,9 @@ class App(tk.Tk):
         if not url.startswith('http'):
             return
         # Pick download folder
-        folder = self.v_outdir.get().strip() or self.cfg.get('dl_folder', '') or str(Path.home() / 'Downloads')
+        folder = self._need_folder(self.v_outdir)
+        if not folder:
+            return
         Path(folder).mkdir(parents=True, exist_ok=True)
         self.v_dl_url.set(url)
         self._dl_cancel_requested = False
@@ -8224,6 +8274,90 @@ class App(tk.Tk):
                 um_log(f'background update check failed: {e}')
         _thr.Thread(target=_work, daemon=True).start()
         self.after(20000, app_mark_healthy)                       # a stable 45s = the update is confirmed good
+
+    # ── Output folders: never chosen automatically ────────────────────────────
+    # (var attribute, config key, what is saved there - used in the picker title)
+    _FOLDER_VARS = (
+        ('v_outdir',         'outdir',        'your clips'),
+        ('v_ae_out',         'outdir',        'the edited video'),
+        ('v_sub_outdir',     'sub_outdir',    'the subtitled video'),
+        ('v_dl_folder',      'dl_folder',     'downloads'),
+        ('thumb_outdir_var', 'thumb_outdir',  'thumbnails'),
+        ('v_up_out',         'up_out',        'upscaled images'),
+        ('v_mr_out',         'outdir',        'the music-free audio / video'),
+        ('censor_out_var',   'censor_outdir', 'censored videos'),
+    )
+
+    def _folder_meta(self, var):
+        for attr, key, what in self._FOLDER_VARS:
+            if getattr(self, attr, None) is var:
+                return key, what
+        return None, 'the output'
+
+    def _need_folder(self, var, what=None):
+        """Output folder from `var`. If it is empty the user picks one now (folder dialog); nothing is
+        ever chosen automatically. -> the folder, or '' if the user cancelled."""
+        cur = (var.get() or '').strip()
+        if cur:
+            return cur
+        key, what2 = self._folder_meta(var)
+        d = filedialog.askdirectory(title=f'Pick a folder to save {what or what2}')
+        if not d:
+            self.log(f'⚠ No output folder picked - pick a folder to save {what or what2}.', YELLOW)
+            return ''
+        var.set(d)
+        if key:
+            self.cfg[key] = d
+            save_cfg(self.cfg)
+        return d
+
+    def _install_folder_tags(self, root=None):
+        """Put a clickable '⚠ Pick a folder' tag inside every empty output-folder box (all tabs).
+        Safe to call again after a tab is built: boxes that already have a tag are skipped."""
+        names = {}
+        for attr, _key, _what in self._FOLDER_VARS:
+            v = getattr(self, attr, None)
+            if v is not None:
+                names[str(v)] = v
+        if not names:
+            return
+
+        def _walk(w):
+            for c in w.winfo_children():
+                if c.winfo_class() == 'Entry' and not getattr(c, '_cf_folder_tag', None):
+                    try:
+                        vn = str(c.cget('textvariable'))
+                    except Exception:
+                        vn = ''
+                    if vn in names:
+                        self._attach_folder_tag(c, names[vn])
+                _walk(c)
+        try:
+            _walk(root or self)
+        except Exception as _e:
+            print(f'[CF] folder tags skipped: {_e}')
+
+    def _attach_folder_tag(self, entry, var):
+        tag = tk.Label(entry.master, text='⚠  Pick a folder', font=('Segoe UI', 8, 'bold'), fg='#000', bg=YELLOW,
+                       padx=_ui_px(6), pady=0, cursor='hand2')
+        entry._cf_folder_tag = tag
+
+        def _pick(_e=None):
+            self._need_folder(var)
+
+        tag.bind('<Button-1>', _pick)
+
+        def _sync(*_):
+            try:
+                if (var.get() or '').strip():
+                    tag.place_forget()
+                else:
+                    tag.place(in_=entry, relx=0, x=_ui_px(4), rely=0.5, anchor='w')
+                    tag.lift()
+            except Exception:
+                pass
+        var.trace_add('write', _sync)
+        _sync()
 
     def _tut_action(self, act):
         if act.startswith('url:'):
@@ -8775,8 +8909,7 @@ class App(tk.Tk):
         if need_ai and not self.v_key.get().strip():
             messagebox.showerror('No API key', 'Enter your API key.')
             return False
-        if need_outdir and not self.v_outdir.get().strip():
-            messagebox.showerror('No output folder', 'Select an output folder.')
+        if need_outdir and not self._need_folder(self.v_outdir):
             return False
         return True
 
@@ -11304,7 +11437,9 @@ Return ONLY the JSON array, no other text."""
             return
         style = self.clip_censor_style.get()
         mp3 = getattr(self, '_clip_mp3_var', tk.StringVar()).get() or self.cfg.get('censor_mp3','')
-        out = self.v_outdir.get()
+        out = self._need_folder(self.v_outdir)
+        if not out:
+            return
         vid = self.v_video.get()
         if not vid or not Path(vid).exists():
             # same fallback as _render_clips (v_video can hold placeholder text after a tab switch)
@@ -11518,9 +11653,8 @@ Return ONLY the JSON array, no other text."""
         if not ff:
             messagebox.showerror('ffmpeg missing', 'Install ffmpeg in Settings → Core Dependencies.')
             return
-        out = self.v_outdir.get().strip()
+        out = self._need_folder(self.v_outdir)
         if not out:
-            messagebox.showerror('No output folder', 'Set an output folder first.')
             return
         vid = self.v_video.get()
         if not vid or not Path(vid).exists():
@@ -11683,8 +11817,10 @@ Return ONLY the JSON array, no other text."""
         if not sel:
             messagebox.showwarning('Nothing selected', 'Check at least one clip.')
             return
-        if not self._resolve_export_video() or not self.v_outdir.get().strip():
-            messagebox.showwarning('Missing', 'Set a valid video file and output folder first.')
+        if not self._resolve_export_video():
+            messagebox.showwarning('Missing', 'Set a valid video file first.')
+            return
+        if not self._need_folder(self.v_outdir):
             return
         self._export_running = True
         self.set_busy(True)
@@ -11701,8 +11837,10 @@ Return ONLY the JSON array, no other text."""
             try: return -int(c.get('score', 5))
             except: return -5
         best3 = sorted(self.clips, key=_score)[:3]
-        if not self._resolve_export_video() or not self.v_outdir.get().strip():
-            messagebox.showwarning('Missing', 'Set a valid video file and output folder first.')
+        if not self._resolve_export_video():
+            messagebox.showwarning('Missing', 'Set a valid video file first.')
+            return
+        if not self._need_folder(self.v_outdir):
             return
         self._export_running = True
         self.set_busy(True)
@@ -11715,6 +11853,8 @@ Return ONLY the JSON array, no other text."""
             return
         if not hasattr(self, '_export_queue') or not self._export_queue:
             messagebox.showwarning('Empty Queue', 'Add clips to queue first.')
+            return
+        if not self._need_folder(self.v_outdir):
             return
         self._export_running = True
         self.set_busy(True)
@@ -11733,9 +11873,11 @@ Return ONLY the JSON array, no other text."""
             messagebox.showwarning('Nothing selected', 'Select clips first.')
             return
         vid = self._resolve_export_video()
-        out = self.v_outdir.get()
-        if not vid or not out:
-            messagebox.showwarning('Missing', 'Set video file and output folder first.')
+        if not vid:
+            messagebox.showwarning('Missing', 'Set a video file first.')
+            return
+        out = self._need_folder(self.v_outdir)
+        if not out:
             return
         # Deep copy clips with current editable values
         import copy
@@ -11765,6 +11907,8 @@ Return ONLY the JSON array, no other text."""
     def _run_queue(self):
         if not self._export_queue:
             messagebox.showwarning('Empty', 'Queue is empty. Add clips first.')
+            return
+        if not self._need_folder(self.v_outdir):
             return
         self.set_busy(True)
         threading.Thread(target=self._process_queue, daemon=True).start()
@@ -12513,6 +12657,8 @@ Return ONLY the JSON array, no other text."""
         if not inp or not Path(inp).exists():
             messagebox.showwarning('No input', 'Select a video file first.')
             return
+        if not self._need_folder(self.v_sub_outdir):
+            return
         # Auto-transcribe if no segments for THIS video yet
         segs = self._sub_segments_for(inp)
         if not segs:
@@ -12547,7 +12693,7 @@ Return ONLY the JSON array, no other text."""
             import threading; threading.Thread(target=_run_trans, daemon=True).start()
             return
         try:
-            outdir = self.v_sub_outdir.get().strip() or str(Path.home() / 'Downloads')
+            outdir = self.v_sub_outdir.get().strip()
             Path(outdir).mkdir(parents=True, exist_ok=True)
             stem = Path(inp).stem
             outfile = str(Path(outdir) / f'{stem} - Subtitled - ClipFinder.mp4')
@@ -13608,6 +13754,8 @@ Return ONLY the JSON array, no other text."""
         if not urls:
             messagebox.showerror('Empty Queue', 'Paste at least one URL in the queue box.')
             return
+        if not self._need_folder(self.v_dl_folder):
+            return
         self._dl_queue_btn.config(state='disabled', text='⬇ Downloading...')
         self._dl_queue_cancel = False  # queue-level cancel flag
         _q_ok = [0]
@@ -13652,7 +13800,9 @@ Return ONLY the JSON array, no other text."""
         if not url:
             messagebox.showerror('Missing URL', 'Paste a video URL first.')
             return
-        folder = self.v_dl_folder.get().strip()
+        folder = self._need_folder(self.v_dl_folder)
+        if not folder:
+            return
         Path(folder).mkdir(parents=True, exist_ok=True)
         # Clear the main log for a fresh download
         try:
@@ -14075,8 +14225,6 @@ Return ONLY the JSON array, no other text."""
                         self.v_video.set(p)
                         if hasattr(self, '_video_entry'):
                             self._video_entry.config(fg=FG)
-                        if not self.v_outdir.get():
-                            self.v_outdir.set(str(Path(p).parent))
                         self._switch_nb('clips')
                         # Re-set after tab switch to survive any focus-out resets
                         self.after(50, lambda _p=p: self.v_video.set(_p))
@@ -14205,8 +14353,6 @@ Return ONLY the JSON array, no other text."""
         # Set entry color to normal (not placeholder gray)
         if hasattr(self, '_video_entry'):
             self.after(0, lambda: self._video_entry.config(fg=FG))
-        if not self.v_outdir.get():
-            self.v_outdir.set(str(Path(p).parent))
         self._switch_nb('clips')
         # Re-set after tab switch in case focus events reset it
         self.after(50, lambda: self.v_video.set(p))
@@ -14394,8 +14540,7 @@ Return ONLY the JSON array, no other text."""
         # Save to
         sec('SAVE FOLDER')
         sf = tk.Frame(left, bg=BG3); sf.pack(fill='x', padx=14, pady=(2,0))
-        self.thumb_outdir_var = tk.StringVar(
-            value=self.cfg.get('thumb_outdir', str(Path.home() / 'Downloads')))
+        self.thumb_outdir_var = tk.StringVar(value=self.cfg.get('thumb_outdir', ''))
         tk.Entry(sf, textvariable=self.thumb_outdir_var, font=FONT_SMALL,
                  bg=BG3, fg=FG, insertbackground=ACCENT, relief='flat', bd=6
                  ).pack(side='left', fill='x', expand=True)
@@ -14796,7 +14941,9 @@ Return ONLY the JSON array, no other text."""
                       ).pack(side='left')
 
     def _thumb_save_one(self, r):
-        out = self.thumb_outdir_var.get().strip() or str(Path.home() / 'Downloads')
+        out = self._need_folder(self.thumb_outdir_var)
+        if not out:
+            return
         Path(out).mkdir(parents=True, exist_ok=True)
         q     = re.sub(r'[\\/:*?"<>|]', '', self.thumb_query_var.get().strip())[:40]
         fname = f'{q}_{r["rank"]}.png'
@@ -14809,7 +14956,9 @@ Return ONLY the JSON array, no other text."""
         if not self._thumb_results:
             messagebox.showwarning('No results', 'Search for thumbnails first.')
             return
-        out = self.thumb_outdir_var.get().strip() or str(Path.home() / 'Downloads')
+        out = self._need_folder(self.thumb_outdir_var)
+        if not out:
+            return
         Path(out).mkdir(parents=True, exist_ok=True)
         q = re.sub(r'[\\/:*?"<>|]', '', self.thumb_query_var.get().strip())[:40]
         for r in self._thumb_results:
@@ -15547,7 +15696,7 @@ Return ONLY the JSON array, no other text."""
 
         tk.Label(up_ctrl, text='OUTPUT FOLDER', font=('Segoe UI', 8,'bold'),
                  fg=ACCENT, bg=BG2).pack(anchor='w', pady=(8,2))
-        self.v_up_out = tk.StringVar(value=self.cfg.get('up_out', str(Path.home()/'Downloads')))
+        self.v_up_out = tk.StringVar(value=self.cfg.get('up_out', ''))
         out_row = tk.Frame(up_ctrl, bg=BG3); out_row.pack(fill='x')
         tk.Entry(out_row, textvariable=self.v_up_out, font=FONT_SMALL,
                  bg=BG3, fg=FG, insertbackground=ACCENT, relief='flat', bd=4, width=22
@@ -15838,9 +15987,8 @@ Return ONLY the JSON array, no other text."""
         if missing:
             messagebox.showerror('Not found', f'File not found:\n{missing[0]}')
             return
-        out_dir = self.v_up_out.get().strip()
+        out_dir = self._need_folder(self.v_up_out)
         if not out_dir:
-            messagebox.showerror('No output', 'Select an output folder.')
             return
         Path(out_dir).mkdir(parents=True, exist_ok=True)
         scale = self.v_up_scale.get()
@@ -17975,9 +18123,8 @@ Return ONLY the JSON array, no other text."""
             messagebox.showerror('No video', 'Add videos to the queue first.' if not missing else
                                  'None of the queued files exist:\n\n' + '\n'.join(missing[:8]))
             return
-        out = self._mr_clean_path(self.v_mr_out.get())
+        out = self._mr_clean_path(self.v_mr_out.get()) or self._need_folder(self.v_mr_out)
         if not out:
-            messagebox.showerror('No output', 'Select an output folder first.')
             return
         model = self.v_mr_model.get()
         keep_vox = bool(self.v_mr_keep_vocals.get())
@@ -18463,7 +18610,7 @@ Return ONLY the JSON array, no other text."""
         out_row2 = tk.Frame(sec_vid, bg=BG2); out_row2.pack(fill='x', padx=12, pady=(0,8))
         tk.Label(out_row2, text='Output:', font=FONT_SMALL, fg=FG2, bg=BG2, width=8, anchor='w').pack(side='left')
         of2 = tk.Frame(out_row2, bg=BG3); of2.pack(side='left', fill='x', expand=True)
-        self.censor_out_var = tk.StringVar(value=self.cfg.get('censor_outdir', str(Path.home()/'Downloads')))
+        self.censor_out_var = tk.StringVar(value=self.cfg.get('censor_outdir', ''))
         tk.Entry(of2, textvariable=self.censor_out_var, font=FONT_SMALL,
                  bg=BG3, fg=FG, insertbackground=ACCENT, relief='flat', bd=4
                  ).pack(side='left', fill='x', expand=True)
@@ -18655,6 +18802,8 @@ Return ONLY the JSON array, no other text."""
         if not videos:
             messagebox.showerror('No videos', 'Add at least one valid video to the queue.')
             return
+        if not self._need_folder(self.censor_out_var):
+            return
         self._censor_save_words()
         self._censor_running = True
         self.censor_go_btn.config(state='disabled', text='⏳  Processing...')
@@ -18721,6 +18870,7 @@ Return ONLY the JSON array, no other text."""
                         self.log(f'[Censor] Using faster-whisper (word timestamps required)')
                         try:
                             _FW = _fresh_import('faster_whisper').WhisperModel  # fix: was _FWC (typo)
+                            _fw_av_compat()
                             # Respect GPU toggle — same as main transcription
                             _cen_use_gpu = getattr(self, 'v_use_gpu_whisper', None)
                             _cen_use_gpu = _cen_use_gpu.get() if _cen_use_gpu else True

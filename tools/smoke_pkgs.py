@@ -91,6 +91,24 @@ for name in MODULES:
     except Exception as exc:                                 # noqa: BLE001 - report everything
         fail(f'import {name}: {exc!r}')
 
+# 4) faster-whisper must be able to DECODE audio with the bundled PyAV (imports alone passed while
+#    PyAV 19 broke every transcription: av.open() lost the metadata_errors argument).
+try:
+    import tempfile, wave
+    with tempfile.TemporaryDirectory() as _td:
+        _wav = Path(_td) / 'silence.wav'
+        with wave.open(str(_wav), 'wb') as _w:
+            _w.setnchannels(1); _w.setsampwidth(2); _w.setframerate(16000)
+            _w.writeframes(b'\x00\x00' * 16000)
+        from faster_whisper.audio import decode_audio
+        _a = decode_audio(str(_wav))
+        if len(_a) < 15000:
+            fail(f'faster_whisper.decode_audio returned {len(_a)} samples for 1 s of audio')
+        else:
+            print(f'ok    faster-whisper decodes audio ({len(_a)} samples)')
+except Exception as exc:                                     # noqa: BLE001
+    fail(f'faster-whisper cannot decode audio: {exc!r}')
+
 if bad:
     print(f'\n{len(bad)} problem(s):')
     for b in bad:

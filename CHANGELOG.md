@@ -1,5 +1,15 @@
 # ClipFinder Changelog
 
+## v1.4.0.6 — November 2026
+
+### 🐛 Bug Fixes
+- **faster-whisper could not decode audio** (`av.open() got an unexpected keyword argument 'metadata_errors'`): installers since 1.4.0.3 bundled PyAV 19, which dropped that argument; faster-whisper 1.2.1 (latest) still passes it. `requirements.txt` pins `av>=11,<19`; PKG_REGISTRY gets an `av` entry with the same range so the start-up sync downgrades an installed 19.x (verified: 19.0.2 -> 18.1.0, stale dist-info removed); `_fw_av_compat` drops the argument meanwhile. `tools/smoke_pkgs.py` now decodes a WAV with `faster_whisper.audio.decode_audio` (verified: fails against PyAV 19).
+- **pythonw has no stdout/stderr**: tqdm (openai-whisper model download) crashed with `'NoneType' object has no attribute 'write'`; both now point at `os.devnull` when missing (reproduced and verified under a console-less pythonw).
+- `pm_constraints(exclude=...)`: a protected package being installed is no longer pinned to its own installed version (blocked the av downgrade: "requested av<19, constraint av==19.0.2").
+
+### ✨ Changes
+- **No automatic output folders**: removed the Downloads defaults (downloads, subtitles, thumbnails, upscaler, censor) and the "use the source video's folder" auto-fill in Clip Finder. Empty output boxes show a clickable "⚠ Pick a folder" tag (`_install_folder_tags`, all tabs incl. lazily built ones); every run path calls `_need_folder`, which opens a folder picker and aborts on cancel.
+
 ## v1.4.0.5 — November 2026
 
 ### 🐛 Bug Fixes

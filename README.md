@@ -6,7 +6,7 @@
 ### AI-Powered Clip Extractor & Social Media Engine
 #### by [@MarsScumbags](https://linktr.ee/marsscumbags)
 
-[![Version](https://img.shields.io/badge/version-1.4.0.5-orange)](https://github.com/marsscumbags/clipfinder/releases)
+[![Version](https://img.shields.io/badge/version-1.4.0.6-orange)](https://github.com/marsscumbags/clipfinder/releases)
 [![Platform](https://img.shields.io/badge/platform-Windows-blue)](https://github.com/marsscumbags/clipfinder/releases)
 [![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
