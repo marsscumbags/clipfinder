@@ -6,7 +6,7 @@ When running as EXE: the app launches immediately.
 Use Settings → Update Modules to install AI/transcription packages.
 """
 
-APP_VERSION = "1.4.0.6"
+APP_VERSION = "1.4.0.7"
 
 import subprocess
 import sys
@@ -2215,7 +2215,8 @@ GUIDE_SECTIONS = [
                         'Auto Edit cuts the best clips for you.'),
         ('Transcript', 'Turns a video into text with timestamps. Use it to read or search what was said.'),
         ('Post Studio', 'Writes captions and posts for TikTok, Instagram, YouTube Shorts and X from a clip.'),
-        ('Downloader', 'Downloads videos from links, or browse a Kick / Twitch / YouTube channel and grab VODs.'),
+        ('Downloader', 'Downloads videos from links, or browse a Kick / Twitch / YouTube channel and grab VODs. '
+                       'Only need part of a long VOD? Fill in Start / End, or paste a link with a time in it (?t=...).'),
         ('Thumbnails', 'Finds images for thumbnails (still in beta).'),
         ('Studio', 'Duplicate image finder and an AI upscaler for images.'),
         ('Censor', 'Finds swear words in a clip and beeps or mutes them.'),
@@ -2314,7 +2315,7 @@ TUTORIAL_STEPS = [
     ('The other tabs',
      '  -  Transcript: turn any video into text with timestamps.\n'
      '  -  Post Studio: captions and posts for your clips.\n'
-     '  -  Downloader: download links, or browse a Kick / Twitch / YouTube channel.\n'
+     '  -  Downloader: download links, or browse a Kick / Twitch / YouTube channel. Start / End grabs just part of a VOD.\n'
      '  -  Thumbnails: find images for thumbnails (beta).\n'
      '  -  Studio: duplicate image finder and image upscaler.\n'
      '  -  Censor: beep or mute swear words.\n'
@@ -4511,6 +4512,90 @@ def _kick_expired(iso):
         return t < _dt.datetime.now(_dt.timezone.utc)
     except Exception:
         return False
+
+
+# ── Download only part of a video (Downloader "Start / End") ─────────────────
+_TC_HMS_RE = re.compile(r'^\s*(?:(\d+(?:\.\d+)?)\s*h)?\s*(?:(\d+(?:\.\d+)?)\s*m)?\s*(?:(\d+(?:\.\d+)?)\s*s?)?\s*$', re.I)
+
+
+def _parse_timecode(text):
+    """'8:03:02' / '03:02' / '29000' / '8h3m2s' / '2m' / '45s' -> seconds (float), '' -> None,
+    anything unreadable -> raises ValueError."""
+    t = str(text or '').strip()
+    if not t:
+        return None
+    if ':' in t:
+        parts = t.split(':')
+        if len(parts) > 3 or not all(x.strip().replace('.', '', 1).isdigit() for x in parts):
+            raise ValueError(t)
+        v = 0.0
+        for x in parts:
+            v = v * 60 + float(x)
+        return v
+    m = _TC_HMS_RE.match(t)
+    if not m or not any(m.groups()):
+        raise ValueError(t)
+    h, mi, se = (float(g) if g else 0.0 for g in m.groups())
+    return h * 3600 + mi * 60 + se
+
+
+def _url_start_time(url):
+    """Start time carried by a share link: Kick '?t=28982', YouTube '&t=90' / '?t=1h2m3s' / '&start=90',
+    Twitch '?t=1h2m3s', '#t=...'. -> seconds or None."""
+    try:
+        from urllib.parse import urlparse, parse_qs
+        u = urlparse(str(url or '').strip())
+        q = parse_qs(u.query)
+        for k in ('t', 'start', 'time_continue'):
+            if q.get(k):
+                return _parse_timecode(q[k][0])
+        if u.fragment.startswith('t='):
+            return _parse_timecode(u.fragment[2:])
+    except Exception:
+        pass
+    return None
+
+
+def _fmt_tc(sec, for_name=False):
+    """Seconds -> '8:03:02' (display) or '8h03m02s' (file names: no ':' allowed)."""
+    sec = int(round(sec or 0))
+    h, r = divmod(sec, 3600)
+    m, s_ = divmod(r, 60)
+    if for_name:
+        return f'{h}h{m:02d}m{s_:02d}s' if h else f'{m:02d}m{s_:02d}s'
+    return f'{h}:{m:02d}:{s_:02d}' if h else f'{m}:{s_:02d}'
+
+
+def _split_queue_line(line):
+    """'URL'  /  'URL 8:03:00-8:10:00'  /  'URL 8:03:00 8:10:00'  /  'URL 8:03:00'
+    -> (url, start|None, end|None). Raises ValueError for an unreadable range."""
+    parts = str(line or '').strip().split(None, 1)
+    url = parts[0] if parts else ''
+    rest = parts[1].strip() if len(parts) > 1 else ''
+    if not rest:
+        return url, None, None
+    rest = re.sub(r'\s+to\s+', '-', rest, flags=re.I)
+    if '-' in rest:
+        a, b = rest.split('-', 1)
+    else:
+        bits = rest.split()
+        a, b = bits[0], (bits[1] if len(bits) > 1 else '')
+    return url, _parse_timecode(a), _parse_timecode(b)
+
+
+def _resolve_section(url, line_start=None, line_end=None, field_start=None, field_end=None, length=600.0):
+    """Which part of `url` to download. Per-link range > Start/End boxes > the link's own ?t= .
+    No end -> start + `length`. -> (start, end) or None for the whole video. Raises ValueError."""
+    start = line_start if line_start is not None else (field_start if field_start is not None else _url_start_time(url))
+    end = line_end if line_end is not None else field_end
+    if start is None and end is None:
+        return None
+    start = start or 0.0
+    if end is None:
+        end = start + max(1.0, float(length or 600))
+    if end <= start:
+        raise ValueError(f'the end ({_fmt_tc(end)}) is not after the start ({_fmt_tc(start)})')
+    return (float(start), float(end))
 
 
 def kick_resolve(url, token=None, log=None):
@@ -13611,6 +13696,48 @@ Return ONLY the JSON array, no other text."""
                        cursor='hand2').pack(side='left', padx=(0, 12))
         # Keep _dl_queue_btn as alias so existing code doesn't break
         self._dl_queue_btn = self._dl_go_btn
+
+        # Only part of the video: Start / End (and what a link with ?t= but no end gets)
+        sec_row = tk.Frame(p, bg=BG); sec_row.pack(fill='x', padx=20, pady=(2, 0))
+        tk.Label(sec_row, text='✂  ONLY PART', font=('Segoe UI', 8, 'bold'), fg=ACCENT, bg=BG).pack(side='left')
+        self.v_dl_start = tk.StringVar(value='')
+        self.v_dl_end = tk.StringVar(value='')
+        self.v_dl_len = tk.StringVar(value=self.cfg.get('dl_section_len', '10:00'))
+        for _lbl, _var, _w in (('Start', self.v_dl_start, 10), ('End', self.v_dl_end, 10), ('No end? grab', self.v_dl_len, 7)):
+            tk.Label(sec_row, text=_lbl, font=FONT_SMALL, fg=FG2, bg=BG).pack(side='left', padx=(12, 4))
+            tk.Entry(sec_row, textvariable=_var, font=FONT_SMALL, width=_w, bg=BG3, fg=FG, insertbackground=ACCENT,
+                     relief='flat', bd=4, justify='center').pack(side='left')
+        tk.Button(sec_row, text='✕', font=FONT_SMALL, bg=BG3, fg=FG2, relief='flat', bd=0, cursor='hand2', padx=6,
+                  command=lambda: (self.v_dl_start.set(''), self.v_dl_end.set(''))).pack(side='left', padx=(6, 0))
+        self._dl_sec_lbl = tk.Label(sec_row, text='', font=FONT_SMALL, fg=FG2, bg=BG, anchor='w')
+        self._dl_sec_lbl.pack(side='left', padx=12, fill='x', expand=True)
+        tk.Label(p, text='Empty = the whole video.  A link with a time in it (?t=… from Kick, YouTube, Twitch) starts there.  '
+                         'Different part per link: put it after the link, e.g.  https://kick.com/…  8:03:00-8:10:00',
+                 font=('Segoe UI', 7), fg=FG3, bg=BG, anchor='w', justify='left').pack(fill='x', padx=20, pady=(2, 6))
+
+        def _sec_preview(*_):
+            try:
+                st, en, ln = self._dl_section_fields()
+            except ValueError as _e:
+                self._dl_sec_lbl.config(text=f"⚠ can't read '{_e}'  (use 8:03:02, 03:02, 29000 or 8h3m2s)", fg=YELLOW)
+                return
+            if st is None and en is None:
+                self._dl_sec_lbl.config(text=f'whole video (links with ?t= → {_fmt_tc(ln)} from that point)', fg=FG3)
+                return
+            a = st or 0.0
+            b = en if en is not None else a + ln
+            if b <= a:
+                self._dl_sec_lbl.config(text='⚠ the end must be after the start', fg=YELLOW)
+            else:
+                self._dl_sec_lbl.config(text=f'→ every link: {_fmt_tc(a)} to {_fmt_tc(b)}  ({_fmt_tc(b - a)})', fg=GREEN)
+            try:
+                if _parse_timecode(self.v_dl_len.get()):
+                    self.cfg['dl_section_len'] = self.v_dl_len.get().strip()
+            except ValueError:
+                pass
+        for _v in (self.v_dl_start, self.v_dl_end, self.v_dl_len):
+            _v.trace_add('write', _sec_preview)
+        _sec_preview()
         div()
 
         # Save folder
@@ -13707,6 +13834,14 @@ Return ONLY the JSON array, no other text."""
             b.config(bg=ACCENT if val == cur else BG3,
                      fg='#000' if val == cur else FG3)
 
+    def _dl_section_fields(self):
+        """(start, end, length) from the Downloader's Start / End / 'No end? grab' boxes (seconds or None).
+        Raises ValueError with the unreadable text."""
+        st = _parse_timecode(self.v_dl_start.get()) if hasattr(self, 'v_dl_start') else None
+        en = _parse_timecode(self.v_dl_end.get()) if hasattr(self, 'v_dl_end') else None
+        ln = _parse_timecode(self.v_dl_len.get()) if hasattr(self, 'v_dl_len') else None
+        return st, en, (ln if ln else 600.0)
+
     def _dl_pick_folder(self):
         d = filedialog.askdirectory(title='Save downloads to...')
         if d:
@@ -13750,9 +13885,27 @@ Return ONLY the JSON array, no other text."""
         try:
             raw = self._dl_queue_box.get('1.0', 'end').strip()
         except: raw = ''
-        urls = [u.strip() for u in raw.splitlines() if u.strip().startswith('http')]
-        if not urls:
+        lines = [u.strip() for u in raw.splitlines() if u.strip().startswith('http')]
+        if not lines:
             messagebox.showerror('Empty Queue', 'Paste at least one URL in the queue box.')
+            return
+        # Which part of each link: "URL 8:03:00-8:10:00" on the line > Start/End boxes > the link's ?t=
+        try:
+            f_start, f_end, f_len = self._dl_section_fields()
+        except ValueError as _ve:
+            messagebox.showerror('Start / End', f"Can't read the time: {_ve}\n\nUse 8:03:02, 03:02, 29000 or 8h3m2s.")
+            return
+        urls, sections, bad = [], [], []
+        for ln in lines:
+            try:
+                u, ls, le = _split_queue_line(ln)
+                urls.append(u)
+                sections.append(_resolve_section(u, ls, le, f_start, f_end, f_len))
+            except ValueError as _ve:
+                bad.append(f'{ln[:70]}  ({_ve})')
+        if bad:
+            messagebox.showerror('Start / End', "Can't read the time range of:\n\n" + '\n'.join(bad[:6]) +
+                                 '\n\nWrite it after the link, e.g.  https://...  8:03:00-8:10:00')
             return
         if not self._need_folder(self.v_dl_folder):
             return
@@ -13776,7 +13929,7 @@ Return ONLY the JSON array, no other text."""
                     self._dl_log_write(f'\n[Queue {i+1}/{len(urls)}] {url}', ACCENT2)
                     self._dl_log_write(f'Starting download...', FG2)
                     self._dl_log_write(f'URL: {url}', FG2)
-                    self._dl_run(url, folder)
+                    self._dl_run(url, folder, sections[i])
                     if getattr(self, '_dl_last_ok', False):
                         _q_ok[0] += 1
                 except Exception as _qe:
@@ -13817,7 +13970,9 @@ Return ONLY the JSON array, no other text."""
         self._dl_log_write(f'URL: {url}', FG2)
         threading.Thread(target=self._dl_run, args=(url, folder), daemon=True).start()
 
-    def _dl_run(self, url, folder):
+    def _dl_run(self, url, folder, section=None):
+        """Download `url` into `folder`. section=(start, end) in seconds downloads only that part
+        (yt-dlp download_ranges: on HLS VODs only the needed segments are fetched)."""
         self._dl_last_ok = False
         _out_folder = _dl_tmp_id = None       # set once known; used by the cleanup in `finally`
         try:
@@ -13902,11 +14057,17 @@ Return ONLY the JSON array, no other text."""
             }
             if ffmpeg_loc:
                 ydl_opts['ffmpeg_location'] = ffmpeg_loc
+            if section:
+                from yt_dlp.utils import download_range_func as _drf
+                ydl_opts['download_ranges'] = _drf(None, [tuple(section)])
+                self._dl_log_write(f'✂  Only {_fmt_tc(section[0])} → {_fmt_tc(section[1])} '
+                                   f'({_fmt_tc(section[1] - section[0])} long) - not the whole video', ACCENT2)
             if quality != 'audio':
                 # keep the video stream, AAC audio (audio-only downloads must NOT get these: they would
                 # override the mp3 encoder of FFmpegExtractAudio)
                 ydl_opts['postprocessor_args'] = {'ffmpeg': ['-c:v', 'copy', '-c:a', 'aac', '-b:a', '192k']}
 
+            _kick_names = None   # (channel, title) of a resolved Kick VOD/clip - used for the final file name
             # Kick.com — resolve the VOD/clip to its public stream URL ourselves. yt-dlp's
             # Kick extractor still calls an API that 404s for the new UUIDv7 VOD ids.
             if _KICK_PAGE_RE.match(url):
@@ -13932,6 +14093,7 @@ Return ONLY the JSON array, no other text."""
                           or ('clip' if _kr['kind'] == 'clip' else 'VOD')
                     ydl_opts['outtmpl'] = str(Path(_out_folder) / f'_cftmp_{_dl_tmp_id}_{_ks} - {_kt}.%(ext)s')
                     self._dl_log_write(f'📁  Name: {_ks} - {_kt} - ClipFinder', FG2)
+                    _kick_names = (_ks, _kt)
                 ydl_opts['http_headers'] = {'Referer': 'https://kick.com/', 'User-Agent': _KICK_UA}
 
             # Cookies
@@ -14152,6 +14314,10 @@ Return ONLY the JSON array, no other text."""
                 import re as _re_url
                 _url_match = _re_url.search(r'(?:twitch\.tv|kick\.com|youtube\.com/c?|x\.com)/([^/?&#]+)', url)
                 uploader = _url_match.group(1) if _url_match else ''
+            # Kick: the stream URL's metadata is "<hash>" / "master.m3u8" - use the resolved channel + title
+            # (before this, every Kick VOD was saved as "<hash> - master.m3u8 - ClipFinder.mp4")
+            if _kick_names:
+                uploader, title = _kick_names
             # Fix generic titles like "master", "index", "playlist"
             if title.lower() in ('master', 'index', 'playlist', 'na', 'video', ''):
                 title = info.get('description', '')[:60] or info.get('webpage_url_basename','') or title
@@ -14178,10 +14344,11 @@ Return ONLY the JSON array, no other text."""
                 _safe_up = _re_fn.sub(r'[\\/:*?"<>|]', '', uploader or '').strip()
                 _safe_ti = _re_fn.sub(r'[\\/:*?"<>|]', '', title or '').strip()[:60]
                 _ext = Path(downloaded).suffix or '.mp4'      # keep .mp3 / .mkv / .jpg etc.
-                if _safe_up and _safe_ti:   _new_name = f'{_safe_up} - {_safe_ti} - ClipFinder{_ext}'
-                elif _safe_ti:              _new_name = f'{_safe_ti} - ClipFinder{_ext}'
-                elif _safe_up:             _new_name = f'{_safe_up} - ClipFinder{_ext}'
-                else:                      _new_name = f'ClipFinder_{_dl_tmp_id}{_ext}'
+                _sec_tag = f' [{_fmt_tc(section[0], True)}-{_fmt_tc(section[1], True)}]' if section else ''
+                if _safe_up and _safe_ti:   _new_name = f'{_safe_up} - {_safe_ti}{_sec_tag} - ClipFinder{_ext}'
+                elif _safe_ti:              _new_name = f'{_safe_ti}{_sec_tag} - ClipFinder{_ext}'
+                elif _safe_up:             _new_name = f'{_safe_up}{_sec_tag} - ClipFinder{_ext}'
+                else:                      _new_name = f'ClipFinder_{_dl_tmp_id}{_sec_tag}{_ext}'
                 try:
                     _new_path = Path(downloaded).parent / _new_name
                     # Always add (1)(2) if same name exists — never overwrite or skip

@@ -1,5 +1,13 @@
 # ClipFinder Changelog
 
+## v1.4.0.7 — November 2026
+
+### ✨ New
+- **Section downloads** (Downloader → Download links → ✂ ONLY PART): Start / End / "No end? grab" boxes with a live preview. Per link: a range after the URL (`URL 8:03:00-8:10:00`) > the Start/End boxes > the link's own `?t=` (Kick `t=<s>`, YouTube `t=`/`start=`, Twitch `t=1h2m3s`, `#t=`); no end -> start + length (default 10:00, saved as `dl_section_len`). `_dl_run(url, folder, section)` passes `download_ranges` to yt-dlp, which fetches only the needed HLS segments (verified: 60 s of a 10.4 h Kick VOD in ~5 s; 30 s of a 4K YouTube video). File names get `[8h03m02s-8h04m02s]`. Clip Finder's link box and the channel browser are unchanged (whole video). Helpers `_parse_timecode`, `_url_start_time`, `_split_queue_line`, `_resolve_section` (27 unit cases incl. the Kick share link).
+
+### 🐛 Bug Fixes
+- Kick VOD downloads were renamed to `<hash> - master.m3u8 - ClipFinder.mp4` (the stream URL's metadata replaced the resolved channel/title at the final rename); the resolved names are now kept.
+
 ## v1.4.0.6 — November 2026
 
 ### 🐛 Bug Fixes
